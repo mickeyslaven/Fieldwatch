@@ -338,6 +338,28 @@ class FlockCamerasTest {
     }
 
     @Test
+    fun bundledListUsesTheNormalParserAndCompactStore() {
+        val raw = platesJson(FlockApproach.MIN_COUNT).toByteArray()
+        val zipped = java.io.ByteArrayOutputStream().use { sink ->
+            GZIPOutputStream(sink).use { it.write(raw) }
+            sink.toByteArray()
+        }
+        val dir = tempDir()
+        val result = FlockFiles.installBundled(
+            dir,
+            zipped.inputStream(),
+            "bundled:test",
+            12L,
+            SensorList.OTHER,
+        )
+        assertTrue(result is FlockFiles.Fetch.Saved)
+        val saved = FlockFiles.read(dir, SensorList.OTHER)!!
+        assertEquals(FlockApproach.MIN_COUNT, saved.cameras.size)
+        assertEquals("bundled:test", saved.header.etag)
+        assertEquals(12L, saved.header.savedAt)
+    }
+
+    @Test
     fun aFailedDownloadNamesTheCause() {
         assertEquals(FlockFiles.Reason.REACH, FlockFiles.failReason(UnknownHostException("list")))
         assertEquals(FlockFiles.Reason.REACH, FlockFiles.failReason(SocketTimeoutException("timed out")))

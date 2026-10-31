@@ -35,6 +35,8 @@ enum class SensorList(
     val expectedBytes: Long,
     /** Version 1 of the plate file saved Flock only and must be fetched again. */
     val refillFlockOnly: Boolean,
+    /** Verified build-time fallback for devices whose old TLS store cannot reach the publisher. */
+    val bundledAsset: String? = null,
 ) {
     PLATES(
         "https://data.dontgetflocked.com/cameras.geojson.gz",
@@ -51,6 +53,7 @@ enum class SensorList(
         "road-sensors.bin",
         616_965L,
         false,
+        "fieldwatch-sensors.geojson.gz.bin",
     ),
 }
 
@@ -161,6 +164,30 @@ object FlockFiles {
         }
         if (cameras.size < FlockApproach.MIN_COUNT) return false
         return install(dir, cameras, etag, savedAt, list)
+    }
+
+    /**
+     * Installs a build-time list after parsing it through the same checks as a download.
+     * The asset is only a fallback; a successful HTTPS download still wins.
+     */
+    fun installBundled(
+        dir: File,
+        raw: java.io.InputStream,
+        etag: String,
+        savedAt: Long,
+        list: SensorList,
+    ): Fetch {
+        return try {
+            val bytes = raw.use { it.readBytes() }
+            when {
+                bytes.isEmpty() -> Fetch.Failed(Reason.EMPTY)
+                bytes.size.toLong() > MAX_BYTES -> Fetch.Failed(Reason.LARGE)
+                commitParsed(dir, bytes, etag, savedAt, list) -> Fetch.Saved(savedAt)
+                else -> Fetch.Failed(Reason.READ)
+            }
+        } catch (_: Exception) {
+            Fetch.Failed(Reason.READ)
+        }
     }
 
     fun probe(dir: File, list: SensorList = SensorList.PLATES): Probe {

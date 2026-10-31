@@ -2407,10 +2407,28 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    FlockFiles.download(app.filesDir, list) { pct ->
+                    val fetched = FlockFiles.download(app.filesDir, list) { pct ->
                         flow.update { row ->
                             if (pct >= 100) row.copy(processing = true) else row.copy(percent = pct)
                         }
+                    }
+                    val asset = list.bundledAsset
+                    if (fetched is FlockFiles.Fetch.Failed &&
+                        fetched.reason == FlockFiles.Reason.TRUST &&
+                        asset != null
+                    ) {
+                        val savedAt = System.currentTimeMillis()
+                        app.assets.open(asset).use { input ->
+                            FlockFiles.installBundled(
+                                app.filesDir,
+                                input,
+                                "bundled:${BuildConfig.VERSION_NAME}",
+                                savedAt,
+                                list,
+                            )
+                        }
+                    } else {
+                        fetched
                     }
                 }
                 when (result) {
