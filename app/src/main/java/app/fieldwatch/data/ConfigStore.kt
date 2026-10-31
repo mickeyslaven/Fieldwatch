@@ -1197,6 +1197,17 @@ class ConfigStore(context: Context) {
             )
             version = CATALOG_V98
         }
+        if (version < CATALOG_V99) {
+            // Shield drive-display migration. This changes only the Live presentation;
+            // scanning, filters, signatures, bookmarks, and alert behavior stay intact.
+            settings = settings.copy(
+                viewMode = app.fieldwatch.domain.ViewMode.DRIVE,
+                listSort = app.fieldwatch.domain.ListSort.NEWEST_ALERT,
+                showLivePath = false,
+                decaySec = maxOf(settings.decaySec, 30),
+            )
+            version = CATALOG_V99
+        }
         if (!settings.darkTheme) settings = settings.copy(darkTheme = true)
         if (settings.scanControlsExpanded) settings = settings.copy(scanControlsExpanded = false)
         presets = presets.filterNot { it.isBuiltIn() && it.id in hiddenPresetIds }
@@ -1243,7 +1254,7 @@ class ConfigStore(context: Context) {
 
     companion object {
         /** Stock catalog generation. Settings footer and the GitHub pack use this. */
-        const val CATALOG_VERSION = 98
+        const val CATALOG_VERSION = 99
         private const val CATALOG_V2 = 2
         private const val CATALOG_V3 = 3
         private const val CATALOG_V4 = 4
@@ -1340,7 +1351,8 @@ class ConfigStore(context: Context) {
         private const val CATALOG_V95 = 95
         private const val CATALOG_V96 = 96
         private const val CATALOG_V97 = 97
-        private const val CATALOG_V98 = CATALOG_VERSION
+        private const val CATALOG_V98 = 98
+        private const val CATALOG_V99 = CATALOG_VERSION
         private val GENERIC_GATT_UUIDS = setOf("180A", "180D", "180F")
         private val POLICY_FLEET_IDS = setOf(
             "fleet-flock-cameras",

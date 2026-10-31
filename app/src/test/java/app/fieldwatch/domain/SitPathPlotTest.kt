@@ -1266,6 +1266,7 @@ class SitPathPlotTest {
         assertFalse(stock.showLivePath)
         assertFalse(stock.mapRotate)
         assertFalse(stock.copy(showLivePath = true, viewMode = ViewMode.RADAR).livePathOnScreen())
+        assertFalse(stock.copy(showLivePath = true, viewMode = ViewMode.DRIVE).livePathOnScreen())
         assertTrue(stock.copy(showLivePath = true, viewMode = ViewMode.BY_CLASS).livePathOnScreen())
         assertFalse(stock.copy(showLivePath = false, viewMode = ViewMode.LIST).livePathOnScreen())
     }
@@ -1274,6 +1275,8 @@ class SitPathPlotTest {
     fun displayControlsFollowThePicture() {
         assertFalse(ViewMode.RADAR.usesListFields())
         assertFalse(ViewMode.RADAR.usesRssiBars())
+        assertFalse(ViewMode.DRIVE.usesListFields())
+        assertFalse(ViewMode.DRIVE.usesRssiBars())
         assertTrue(ViewMode.TIMELINE.usesListFields())
         assertFalse(ViewMode.TIMELINE.usesRssiBars())
         listOf(ViewMode.LIST, ViewMode.HYBRID, ViewMode.BY_CLASS).forEach { mode ->

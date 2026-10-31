@@ -122,7 +122,8 @@ class ClassOutlineTest {
     @Test
     fun viewModeLabelExists() {
         assertEquals("By class", ViewMode.BY_CLASS.label())
-        assertEquals(5, ViewMode.entries.size)
+        assertEquals("Drive alerts", ViewMode.DRIVE.label())
+        assertEquals(6, ViewMode.entries.size)
     }
 
     @Test

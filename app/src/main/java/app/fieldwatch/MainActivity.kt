@@ -1,5 +1,6 @@
 package app.fieldwatch
 
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -21,6 +22,8 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val vm: FieldwatchViewModel by viewModels()
+    @Suppress("DEPRECATION")
+    private var carKeyguardLock: KeyguardManager.KeyguardLock? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -34,6 +37,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Android 7 on the Shield can leave a swipe-only keyguard above an activity
+        // launched by BOOT_COMPLETED even with the window flags below. This is a
+        // dedicated car display, so use the legacy API that this OS actually honors.
+        @Suppress("DEPRECATION")
+        carKeyguardLock =
+            (getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager)
+                .newKeyguardLock("fieldwatch:car-display")
+                .also { it.disableKeyguard() }
         window.addFlags(
             WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or

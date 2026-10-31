@@ -50,7 +50,7 @@ class SettingsExchangeTest {
         assertTrue(stock.darkTheme)
         assertTrue(stock.keepScreenOn)
         assertTrue(stock.alertBeep)
-        assertEquals(ViewMode.BY_CLASS, stock.viewMode)
+        assertEquals(ViewMode.DRIVE, stock.viewMode)
         assertTrue(stock.showRssiBar)
         assertFalse(stock.showLivePath)
         assertEquals(0.5f, stock.livePathSplit, 0.001f)

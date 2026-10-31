@@ -193,6 +193,11 @@ data class FlockLayerUi(
     val fullList: Boolean = true,
 )
 
+data class DriveNotice(
+    val at: Long,
+    val text: String,
+)
+
 data class FieldwatchUi(
     val devices: List<Sighting> = emptyList(),
     val filtered: List<Sighting> = emptyList(),
@@ -234,6 +239,8 @@ data class FieldwatchUi(
     val phoneLon: Double? = null,
     /** Degrees clockwise from north. NaN until GPS has shown a direction. */
     val travelDeg: Double = Double.NaN,
+    /** Watchlist alert time by radio key for the current app process. */
+    val alertAt: Map<String, Long> = emptyMap(),
 )
 
 class FieldwatchViewModel(application: Application) : AndroidViewModel(application) {
@@ -312,6 +319,10 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
     private val lastAlertAt = MutableStateFlow<Map<String, Long>>(emptyMap())
     private val _alertedKeys = MutableStateFlow<Set<String>>(emptySet())
     val alertedKeys: StateFlow<Set<String>> = _alertedKeys
+    private val _driveNotices = MutableStateFlow<List<DriveNotice>>(emptyList())
+    val driveNotices: StateFlow<List<DriveNotice>> = _driveNotices.asStateFlow()
+    private val _driveFullscreen = MutableStateFlow(true)
+    val driveFullscreen: StateFlow<Boolean> = _driveFullscreen.asStateFlow()
     private val clock = MutableStateFlow(System.currentTimeMillis())
 
     /** When Show live path last turned on, or when the last sit ended while the switch stayed on. */
@@ -571,7 +582,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             }
             val heardAgo = now - device.lastSeen
             val inWindow = when (config.settings.viewMode) {
-                ViewMode.TIMELINE -> heardAgo <= 15 * 60_000L
+                ViewMode.TIMELINE, ViewMode.DRIVE -> heardAgo <= 15 * 60_000L
                 else -> heardAgo <= persistMs || !device.gone
             }
             if (!inWindow) return@filter false
@@ -680,6 +691,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             phoneLat = phone?.first,
             phoneLon = phone?.second,
             travelDeg = app.travelDeg,
+            alertAt = alerts,
         )
     }.flowOn(Dispatchers.Default)
         .stateIn(
@@ -867,6 +879,16 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
         viewModelScope.launch {
+            app.alerter.mappedSensorAlerts.collect { text ->
+                val now = System.currentTimeMillis()
+                _driveNotices.update { old ->
+                    (listOf(DriveNotice(now, text)) + old)
+                        .filter { now - it.at <= 15 * 60_000L }
+                        .take(12)
+                }
+            }
+        }
+        viewModelScope.launch {
             app.alerter.flashes.collect { key ->
                 revealOutlineFor(key)
                 lastAlertAt.update { it + (key to System.currentTimeMillis()) }
@@ -1051,9 +1073,14 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun setViewMode(mode: ViewMode) {
+        _driveFullscreen.value = mode == ViewMode.DRIVE
         viewModelScope.launch {
             app.config.update { it.copy(settings = it.settings.copy(viewMode = mode)) }
         }
+    }
+
+    fun setDriveFullscreen(on: Boolean) {
+        _driveFullscreen.value = on
     }
 
     fun toggleOutlineClass(id: String) {

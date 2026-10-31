@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.GpsFixed
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -109,6 +110,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -289,6 +293,8 @@ private fun PermissionGate(onRequest: () -> Unit) {
 private fun FieldwatchShell(state: FieldwatchUi, vm: FieldwatchViewModel) {
     val nav = rememberNavController()
     val route = nav.currentBackStackEntryAsState().value?.destination?.route ?: "live"
+    val driveFullscreen by vm.driveFullscreen.collectAsStateWithLifecycle()
+    val immersiveDrive = route == "live" && state.settings.viewMode == ViewMode.DRIVE && driveFullscreen
     val context = LocalContext.current
     val export by vm.export.collectAsStateWithLifecycle()
     val candidates by vm.candidates.collectAsStateWithLifecycle()
@@ -451,7 +457,7 @@ private fun FieldwatchShell(state: FieldwatchUi, vm: FieldwatchViewModel) {
     }
     val view = LocalView.current
     var tourTargets by remember { mutableStateOf(LiveTourTargets()) }
-    val showTour = !state.settings.liveTourDone && route == "live"
+    val showTour = !immersiveDrive && !state.settings.liveTourDone && route == "live"
     LaunchedEffect(showTour) {
         if (showTour && state.settings.scanControlsExpanded) {
             vm.setScanControlsExpanded(false)
@@ -469,11 +475,25 @@ private fun FieldwatchShell(state: FieldwatchUi, vm: FieldwatchViewModel) {
             window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
+    DisposableEffect(immersiveDrive, view) {
+        val window = (view.context as? android.app.Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (immersiveDrive) {
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            if (immersiveDrive) controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
-            if (route != "detail" && route != "hunt") {
+            if (!immersiveDrive && route != "detail" && route != "hunt") {
                 TopAppBar(
                     expandedHeight = 52.dp,
                     title = {
@@ -602,7 +622,7 @@ private fun FieldwatchShell(state: FieldwatchUi, vm: FieldwatchViewModel) {
             }
         },
         bottomBar = {
-            if (route != "detail" && route != "hunt") {
+            if (!immersiveDrive && route != "detail" && route != "hunt") {
                 Column {
                     if (route == "live" && (state.filter.arrivalsOnly || state.filter.movingWithYou)) {
                         LiveSessionBar(
@@ -1064,6 +1084,7 @@ private fun ViewMode.glyph(): ImageVector = when (this) {
     ViewMode.TIMELINE -> dashedLineGlyph
     ViewMode.HYBRID -> Icons.AutoMirrored.Outlined.ShowChart
     ViewMode.BY_CLASS -> classBarsGlyph
+    ViewMode.DRIVE -> Icons.Outlined.DirectionsCar
 }
 
 @Composable

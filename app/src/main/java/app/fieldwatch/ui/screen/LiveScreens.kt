@@ -419,6 +419,7 @@ private fun LiveMode(
     pinEnd: Boolean,
 ) {
     when (state.settings.viewMode) {
+        ViewMode.DRIVE -> DriveView(state, vm, onOpen, flashKeys)
         ViewMode.RADAR -> RadarView(live, vm, sort, windowMs, onOpen, emptyHint = liveEmpty(state, RADAR_EMPTY), showFleet = showFleet, demoMode = demoMode, flashKeys = flashKeys, alertedKeys = alertedKeys)
         ViewMode.LIST -> RankedList(live, vm, onOpen, sparklines = false, sort = sort, windowMs = windowMs, showBar = showBar, layoutEpoch = state.settings.scanControlsExpanded, emptyHint = liveEmpty(state, LIST_EMPTY), showNewAge = state.filter.arrivalsOnly, showFleet = showFleet, showFrequency = showFrequency, showSeenTimes = showSeenTimes, flashKeys = flashKeys, alertedKeys = alertedKeys, pinEnd = pinEnd, titleLine = titleLine, subtitleLine = subtitleLine, demoMode = demoMode)
         ViewMode.TIMELINE -> TimelineView(live, vm, onOpen, showFleet = showFleet, showFrequency = showFrequency, showSeenTimes = showSeenTimes, flashKeys = flashKeys, alertedKeys = alertedKeys, titleLine = titleLine, subtitleLine = subtitleLine, demoMode = demoMode)

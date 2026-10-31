@@ -36,6 +36,21 @@ is the device that has received live Wi-Fi, BLE, GPS, logging, report, and senso
   HTTPS download remains the first choice; certificate verification is never disabled.
 - Uses conservative Gradle memory settings so the project can build on modest hardware.
 
+## Shield car display
+
+The `shield-android7` build adds a Drive alerts view for the tested Shield K1. It is a large,
+animated, glanceable presentation of Fieldwatch's existing watchlist, GNSS, and mapped-sensor
+alerts. It does not infer bearing or distance from RSSI.
+
+Drive view enters immersive mode by default and hides both Android system bars and Fieldwatch's
+navigation. Tap the full-screen icon in the upper-right to restore the controls. On the dedicated
+test tablet, auto-rotation is disabled and the display is locked upright in portrait.
+
+The app listens for `BOOT_COMPLETED` and `ACTION_POWER_CONNECTED`, opens over the non-secure
+keyguard, wakes the display, and starts its foreground scanner. Stock NVIDIA Android 7 can spend
+about 30–40 seconds draining its ordered boot queue while still showing the lock screen. Fieldwatch
+then takes focus and dismisses that screen automatically; no swipe is required.
+
 The bundled sensor file is copied byte-for-byte from the upstream source tree. Its SHA-256 is:
 
 ```text

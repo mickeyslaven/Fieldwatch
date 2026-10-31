@@ -4,6 +4,22 @@ Newest first. This is Fieldwatch (`app.fieldwatch`). Each build below is what Se
 
 Fieldwatch continues the Spectre 1.2.14 field build under a new name, application id, and the MIT License. It does not replace Spectre on a phone.
 
+## 1.1.39-shield7.1-drive — 31 October 2026
+
+- Adds a glanceable Drive alerts view for the NVIDIA Shield Tablet K1. Large status cards show
+  live watchlist hits, GNSS warnings, mapped-camera notices, radio counts, RSSI, and recent events
+  without pretending RSSI provides direction or distance.
+- Drive view is immersive by default: Android system bars and Fieldwatch navigation disappear.
+  The large button in the upper-right restores them, and can return to full screen.
+- Adds animated status glow, signal sweep, alert-card entrances, and responsive portrait/landscape
+  layouts sized for an in-car display.
+- Keeps the Shield locked in portrait and starts Fieldwatch after cold boot or reported external
+  power. NVIDIA Android 7 can show its lock screen for roughly 30–40 seconds while the ordered
+  boot queue runs; Fieldwatch then dismisses it and begins scanning without a swipe.
+- Preserves the Android 7 drone voice-watch configuration and adds no claim of RF direction or
+  range. Catalog 99 migrates existing Shield installs to Drive view without replacing watchlists,
+  signatures, bookmarks, or reports.
+
 ## 1.1.37 — 29 October 2026
 
 - Show live path and Hunt turn with the heading as it changes. The map already on screen turns with it, so the edges stay filled. Standing still, or turning the phone in place, leaves the map where it is.

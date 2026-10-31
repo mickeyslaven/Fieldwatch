@@ -64,6 +64,8 @@ class Alerter(private val context: Context) {
     }
     private val _flashes = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val flashes: SharedFlow<String> = _flashes.asSharedFlow()
+    private val _mappedSensorAlerts = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val mappedSensorAlerts: SharedFlow<String> = _mappedSensorAlerts.asSharedFlow()
 
     init {
         ensureChannel()
@@ -197,6 +199,7 @@ class Alerter(private val context: Context) {
      */
     fun flockNote(text: String) {
         if (text.isBlank()) return
+        _mappedSensorAlerts.tryEmit(text)
         prepareVoice()
         main.post {
             ensureFlockChannel()

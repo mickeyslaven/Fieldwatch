@@ -499,6 +499,7 @@ private fun buildLines(): List<EnglishLine> = listOf(
     en("view.timeline", "Timeline", LanguageSlot.CONTROL),
     en("view.hybrid", "Hybrid + sparklines", LanguageSlot.CONTROL),
     en("view.by.class", "By class", LanguageSlot.CONTROL),
+    en("view.drive", "Drive alerts", LanguageSlot.CONTROL),
     en("voice.class", "Class", LanguageSlot.CONTROL),
     en("voice.signature", "Signature", LanguageSlot.CONTROL),
     en("voice.both", "Class + signature", LanguageSlot.CONTROL),

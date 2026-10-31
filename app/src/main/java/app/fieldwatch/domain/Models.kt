@@ -15,7 +15,7 @@ enum class RadioKind { WIFI, BLE }
 
 @Serializable
 enum class ViewMode {
-    RADAR, LIST, TIMELINE, HYBRID, BY_CLASS,
+    RADAR, LIST, TIMELINE, HYBRID, BY_CLASS, DRIVE,
     ;
 
     fun label(): String = when (this) {
@@ -24,10 +24,11 @@ enum class ViewMode {
         TIMELINE -> LanguageText.text("view.timeline")
         HYBRID -> LanguageText.text("view.hybrid")
         BY_CLASS -> LanguageText.text("view.by.class")
+        DRIVE -> LanguageText.text("view.drive")
     }
 
     /** Title, subtitle, frequency, first/last, and the live path are list fields. Radar has none of them. */
-    fun usesListFields(): Boolean = this != RADAR
+    fun usesListFields(): Boolean = this != RADAR && this != DRIVE
 
     /** Strength bar on Strength list, Hybrid, and By class. Radar and Timeline show strength another way. */
     fun usesRssiBars(): Boolean = this == LIST || this == HYBRID || this == BY_CLASS
@@ -1240,7 +1241,7 @@ data class AppSettings(
     val mapFrame: Int = -1,
     /** Kept so an older file still decodes. The double-tap no longer reads it. */
     val mapHome: Int = MapFrame.NORTH,
-    val viewMode: ViewMode = ViewMode.BY_CLASS,
+    val viewMode: ViewMode = ViewMode.DRIVE,
     val strengthSort: StrengthSort = StrengthSort.AVERAGE,
     val averageWindowSec: Int = 30,
     val listSort: ListSort = ListSort.STRENGTH,
@@ -1423,7 +1424,8 @@ fun AppSettings.offerLiveTourOnce(): AppSettings {
 }
 
 /** The path band sits over a list. Radar has no list, so the switch stays as saved and the band stays off. */
-fun AppSettings.livePathOnScreen(): Boolean = showLivePath && viewMode != ViewMode.RADAR
+fun AppSettings.livePathOnScreen(): Boolean =
+    showLivePath && viewMode != ViewMode.RADAR && viewMode != ViewMode.DRIVE
 
 data class DetectionPolicy(
     val ssidKeywords: Boolean = true,
