@@ -1,6 +1,7 @@
 package app.fieldwatch.data
 
 import android.content.Context
+import app.fieldwatch.domain.AlertVoiceWhat
 import app.fieldwatch.domain.AppSettings
 import app.fieldwatch.domain.DefaultCatalog
 import app.fieldwatch.domain.FilterEngine
@@ -1176,6 +1177,26 @@ class ConfigStore(context: Context) {
             if (extras.isNotEmpty()) fleets = (fleets + extras).sortedBy { it.name.lowercase() }
             version = CATALOG_V97
         }
+        if (version < CATALOG_V98) {
+            // Shield car-mode migration: preserve every operator customization, but make
+            // sure every built-in drone signature is watched and spoken. This runs once;
+            // the operator can still change the switches afterward.
+            val droneIds = fleets
+                .filter { it.builtIn && it.kind == SignatureClass.DRONE }
+                .map { it.id }
+                .toSet()
+            val watched = watchlist.mapNotNull { it.fleetId }.toSet()
+            val missing = DefaultCatalog.defaultWatchlist().filter {
+                it.fleetId in droneIds && it.fleetId !in watched
+            }
+            if (missing.isNotEmpty()) watchlist = watchlist + missing
+            settings = settings.copy(
+                alertsEnabled = true,
+                alertVoice = true,
+                alertVoiceWhat = AlertVoiceWhat.BOTH,
+            )
+            version = CATALOG_V98
+        }
         if (!settings.darkTheme) settings = settings.copy(darkTheme = true)
         if (settings.scanControlsExpanded) settings = settings.copy(scanControlsExpanded = false)
         presets = presets.filterNot { it.isBuiltIn() && it.id in hiddenPresetIds }
@@ -1222,7 +1243,7 @@ class ConfigStore(context: Context) {
 
     companion object {
         /** Stock catalog generation. Settings footer and the GitHub pack use this. */
-        const val CATALOG_VERSION = 97
+        const val CATALOG_VERSION = 98
         private const val CATALOG_V2 = 2
         private const val CATALOG_V3 = 3
         private const val CATALOG_V4 = 4
@@ -1318,7 +1339,8 @@ class ConfigStore(context: Context) {
         private const val CATALOG_V94 = 94
         private const val CATALOG_V95 = 95
         private const val CATALOG_V96 = 96
-        private const val CATALOG_V97 = CATALOG_VERSION
+        private const val CATALOG_V97 = 97
+        private const val CATALOG_V98 = CATALOG_VERSION
         private val GENERIC_GATT_UUIDS = setOf("180A", "180D", "180F")
         private val POLICY_FLEET_IDS = setOf(
             "fleet-flock-cameras",
