@@ -1,5 +1,14 @@
 # Fieldwatch
 
+> [!IMPORTANT]
+> **Unofficial Android 7 compatibility branch.** Fieldwatch was created by
+> [OffGridPete](https://github.com/OffGridPete), and the official project is
+> [OffGridPete/Fieldwatch](https://github.com/OffGridPete/Fieldwatch). This fork only adapts that
+> work for Android 7 / API 24 and is not made, reviewed, or supported by Off Grid Pete LLC.
+> The compatibility APK is tested on an NVIDIA Shield Tablet K1; newer Android devices should use
+> the [official releases](https://github.com/OffGridPete/Fieldwatch/releases). See
+> [ANDROID7.md](ANDROID7.md) for changes, limitations, build details, and full credit.
+
 I built Fieldwatch as a personal tool to see which Wi-Fi access points and Bluetooth LE devices my phone could detect, so I could better understand what was operating around me. It is entirely passive and only listens. There is no dongle, no account, and no backend server. It works offline in the field.
 
 My goals were a modern, easy-to-use interface; flexible, customizable views; a filtering engine so I only see what matters; an extensible signature library so I can identify as many radio sources as possible and add new ones on the fly; and the ability to generate reports of what was observed.
