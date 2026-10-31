@@ -9,13 +9,14 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import app.fieldwatch.alert.Alerter
 import app.fieldwatch.crash.CrashNotes
 import app.fieldwatch.radio.GnssMonitor
+import app.fieldwatch.radio.compatLocationListener
 import app.fieldwatch.data.AssetLanguageFiles
 import app.fieldwatch.data.ConfigStore
 import app.fieldwatch.data.FlockFiles
@@ -558,8 +559,8 @@ class FieldwatchApp : Application() {
     @Volatile
     var pendingCrash: CrashNotes.Pending? = null
     private var started = false
-    private val gpsListener = LocationListener { loc -> onProviderFix(loc, gps = true) }
-    private val netListener = LocationListener { loc -> onProviderFix(loc, gps = false) }
+    private val gpsListener = compatLocationListener { loc -> onProviderFix(loc, gps = true) }
+    private val netListener = compatLocationListener { loc -> onProviderFix(loc, gps = false) }
 
     override fun onCreate() {
         super.onCreate()
@@ -869,21 +870,27 @@ class FieldwatchApp : Application() {
         lastFix = loc.latitude to loc.longitude
         lastFixAt = loc.time
         if (loc.hasSpeed() && loc.speed >= 0f && loc.speed.isFinite()) {
-            val loose = loc.hasSpeedAccuracy() && loc.speedAccuracyMetersPerSecond > 4f
+            val loose = Build.VERSION.SDK_INT >= 26 &&
+                loc.hasSpeedAccuracy() && loc.speedAccuracyMetersPerSecond > 4f
             if (!loose) {
                 speedMps = loc.speed.toDouble()
                 speedAt = System.currentTimeMillis()
             }
         }
         if (gps) {
-            val looseSpeed = loc.hasSpeedAccuracy() && loc.speedAccuracyMetersPerSecond > 4f
+            val looseSpeed = Build.VERSION.SDK_INT >= 26 &&
+                loc.hasSpeedAccuracy() && loc.speedAccuracyMetersPerSecond > 4f
             val speed = if (loc.hasSpeed() && loc.speed >= 0f && loc.speed.isFinite() && !looseSpeed) {
                 loc.speed
             } else {
                 null
             }
             val bearing = if (loc.hasBearing() && loc.bearing.isFinite()) loc.bearing else null
-            val bearingAcc = if (loc.hasBearingAccuracy() && loc.bearingAccuracyDegrees.isFinite()) {
+            val bearingAcc = if (
+                Build.VERSION.SDK_INT >= 26 &&
+                loc.hasBearingAccuracy() &&
+                loc.bearingAccuracyDegrees.isFinite()
+            ) {
                 loc.bearingAccuracyDegrees
             } else {
                 null

@@ -96,6 +96,7 @@ object CrashNotes {
     }
 
     private fun traceOf(record: android.app.ApplicationExitInfo): String {
+        if (Build.VERSION.SDK_INT < 30) return ""
         val bytes = runCatching {
             record.traceInputStream?.use { input ->
                 val buf = ByteArray(8_192)

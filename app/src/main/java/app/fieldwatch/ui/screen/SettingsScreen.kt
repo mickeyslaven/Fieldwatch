@@ -1832,7 +1832,8 @@ internal fun isIgnoringBatteryOptimizations(context: Context): Boolean =
         ?.isIgnoringBatteryOptimizations(context.packageName) == true
 
 internal fun isBackgroundUsageAllowed(context: Context): Boolean =
-    context.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted != true
+    Build.VERSION.SDK_INT < 28 ||
+        context.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted != true
 
 private enum class BatteryAndroidGate { BACKGROUND, UNRESTRICTED }
 

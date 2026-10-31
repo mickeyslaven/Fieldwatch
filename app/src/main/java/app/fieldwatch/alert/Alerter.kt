@@ -46,6 +46,7 @@ class Alerter(private val context: Context) {
     private var beepTrack: AudioTrack? = null
     private var huntTrack: AudioTrack? = null
     private var focusRequest: AudioFocusRequest? = null
+    private var legacyFocusHeld = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var speaking = false
@@ -376,12 +377,21 @@ class Alerter(private val context: Context) {
             // TTS engines run in another process. Holding media focus here ducks
             // or silences them, so skip focus when a phrase will follow the pip.
             if (holdFocus) {
-                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                    .setAudioAttributes(attrs)
-                    .setAcceptsDelayedFocusGain(false)
-                    .build()
-                audio.requestAudioFocus(req)
-                focusRequest = req
+                if (Build.VERSION.SDK_INT >= 26) {
+                    val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                        .setAudioAttributes(attrs)
+                        .setAcceptsDelayedFocusGain(false)
+                        .build()
+                    audio.requestAudioFocus(req)
+                    focusRequest = req
+                } else {
+                    @Suppress("DEPRECATION")
+                    legacyFocusHeld = audio.requestAudioFocus(
+                        null,
+                        AudioManager.STREAM_MUSIC,
+                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+                    ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+                }
             }
             beepTrack = track
             track.play()
@@ -406,9 +416,15 @@ class Alerter(private val context: Context) {
     }
 
     private fun releaseFocus() {
-        val req = focusRequest ?: return
-        focusRequest = null
-        runCatching { audio.abandonAudioFocusRequest(req) }
+        if (Build.VERSION.SDK_INT >= 26) {
+            val req = focusRequest ?: return
+            focusRequest = null
+            runCatching { audio.abandonAudioFocusRequest(req) }
+        } else if (legacyFocusHeld) {
+            legacyFocusHeld = false
+            @Suppress("DEPRECATION")
+            runCatching { audio.abandonAudioFocus(null) }
+        }
     }
 
     private fun finishBeep() {
@@ -492,15 +508,20 @@ class Alerter(private val context: Context) {
             context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
         if (!vibrator.hasVibrator()) return
-        val amp = if (vibrator.hasAmplitudeControl()) 255 else VibrationEffect.DEFAULT_AMPLITUDE
-        val effect = VibrationEffect.createOneShot(HUNT_PULSE_MS, amp)
-        if (Build.VERSION.SDK_INT >= 33) {
-            val attrs = VibrationAttributes.Builder()
-                .setUsage(VibrationAttributes.USAGE_ALARM)
-                .build()
-            vibrator.vibrate(effect, attrs)
+        if (Build.VERSION.SDK_INT >= 26) {
+            val amp = if (vibrator.hasAmplitudeControl()) 255 else VibrationEffect.DEFAULT_AMPLITUDE
+            val effect = VibrationEffect.createOneShot(HUNT_PULSE_MS, amp)
+            if (Build.VERSION.SDK_INT >= 33) {
+                val attrs = VibrationAttributes.Builder()
+                    .setUsage(VibrationAttributes.USAGE_ALARM)
+                    .build()
+                vibrator.vibrate(effect, attrs)
+            } else {
+                vibrator.vibrate(effect)
+            }
         } else {
-            vibrator.vibrate(effect)
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(HUNT_PULSE_MS)
         }
     }
 
@@ -619,7 +640,13 @@ class Alerter(private val context: Context) {
             context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
         if (!vibrator.hasVibrator()) return
-        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 80, 60, 80), -1))
+        val pattern = longArrayOf(0, 80, 60, 80)
+        if (Build.VERSION.SDK_INT >= 26) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(pattern, -1)
+        }
     }
 
     private fun ensureChannel() {
@@ -684,7 +711,12 @@ class Alerter(private val context: Context) {
             context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
         if (!vibrator.hasVibrator()) return
-        vibrator.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
+        if (Build.VERSION.SDK_INT >= 26) {
+            vibrator.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(200)
+        }
     }
 
     companion object {

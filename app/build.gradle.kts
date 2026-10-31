@@ -23,13 +23,14 @@ fun localProp(name: String): String? {
 android {
     namespace = "app.fieldwatch"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "app.fieldwatch"
-        minSdk = 29
+        minSdk = 24
         targetSdk = 35
         versionCode = 47
-        versionName = "1.1.37"
+        versionName = "1.1.37-shield7"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -80,6 +81,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -96,6 +98,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")

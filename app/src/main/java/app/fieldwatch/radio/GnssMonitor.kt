@@ -9,7 +9,6 @@ import android.location.GnssMeasurement
 import android.location.GnssMeasurementRequest
 import android.location.GnssMeasurementsEvent
 import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
@@ -195,8 +194,8 @@ class GnssMonitor(private val app: FieldwatchApp) {
         }
     }
 
-    private val ownGps = LocationListener { loc -> ingestFix(snapFix(loc, gps = true)) }
-    private val ownNet = LocationListener { loc -> ingestFix(snapFix(loc, gps = false)) }
+    private val ownGps = compatLocationListener { loc -> ingestFix(snapFix(loc, gps = true)) }
+    private val ownNet = compatLocationListener { loc -> ingestFix(snapFix(loc, gps = false)) }
 
     fun sync(settings: AppSettings, profile: GnssPhoneProfile?) {
         if (calibrating) return
@@ -526,8 +525,8 @@ class GnssMonitor(private val app: FieldwatchApp) {
         main.post { app.syncGnss() }
     }
 
-    private val calGps = LocationListener { loc ->
-        if (!calibrating || !loc.hasAccuracy()) return@LocationListener
+    private val calGps = compatLocationListener { loc ->
+        if (!calibrating || !loc.hasAccuracy()) return@compatLocationListener
         calFixes += GnssCalFix(
             elapsedMs = SystemClock.elapsedRealtime(),
             accM = loc.accuracy,
@@ -659,7 +658,7 @@ class GnssMonitor(private val app: FieldwatchApp) {
                 bucket.sv += 1
                 bucket.bySv[m.svid] = cn0
             }
-            if (m.hasAutomaticGainControlLevelDb()) {
+            if (Build.VERSION.SDK_INT >= 26 && m.hasAutomaticGainControlLevelDb()) {
                 val db = m.automaticGainControlLevelDb
                 if (db.isFinite() && db >= -80.0) {
                     sawMeas = true
@@ -822,7 +821,9 @@ class GnssMonitor(private val app: FieldwatchApp) {
                 null
             },
             hardwareClockDiscontinuityCount = clock.hardwareClockDiscontinuityCount,
-            elapsedRealtimeNanos = if (clock.hasElapsedRealtimeNanos()) clock.elapsedRealtimeNanos else null,
+            elapsedRealtimeNanos = if (
+                Build.VERSION.SDK_INT >= 29 && clock.hasElapsedRealtimeNanos()
+            ) clock.elapsedRealtimeNanos else null,
         )
         val agcs = ArrayList<GnssRawAgc>()
         if (Build.VERSION.SDK_INT >= 33) {
@@ -848,7 +849,11 @@ class GnssMonitor(private val app: FieldwatchApp) {
 
     @Suppress("DEPRECATION")
     private fun satOf(m: GnssMeasurement, useAgcRows: Boolean): GnssRawSat {
-        val agc = if (!useAgcRows && m.hasAutomaticGainControlLevelDb()) {
+        val agc = if (
+            Build.VERSION.SDK_INT >= 26 &&
+            !useAgcRows &&
+            m.hasAutomaticGainControlLevelDb()
+        ) {
             m.automaticGainControlLevelDb.takeIf { it.isFinite() }
         } else {
             null
@@ -891,7 +896,7 @@ class GnssMonitor(private val app: FieldwatchApp) {
             } else {
                 null
             },
-            codeType = m.codeType,
+            codeType = if (Build.VERSION.SDK_INT >= 29) m.codeType else null,
         )
     }
 

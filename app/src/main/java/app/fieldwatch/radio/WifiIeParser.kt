@@ -211,6 +211,7 @@ object WifiIeParser {
     }
 
     private fun ieBytes(ie: ScanResult.InformationElement): ByteArray? {
+        if (Build.VERSION.SDK_INT < 30) return null
         val raw = runCatching { ie.bytes }.getOrNull() ?: return null
         val copy = ByteArray(raw.remaining())
         raw.duplicate().get(copy)
