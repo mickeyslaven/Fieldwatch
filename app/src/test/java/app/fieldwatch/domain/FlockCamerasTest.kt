@@ -152,6 +152,53 @@ class FlockCamerasTest {
     }
 
     @Test
+    fun denseCameraZoneProducesOneBoundedAlert() {
+        val userLat = 39.0
+        val userLon = -104.0
+        val cameras = List(200) { i ->
+            val at = FlockApproach.destination(userLat, userLon, (i % 9 - 4).toDouble(), 90.0 + i)
+            FlockCamera(i + 1L, at.first, at.second, emptyList(), kind = SensorKind.CAMERA)
+        }
+        val latch = FlockLatch()
+        assertTrue(latch.consider(userLat, userLon, 0.0, 12.0, cameras, nowMs = 1_000L) != null)
+        assertNull(latch.consider(userLat, userLon, 0.0, 12.0, cameras, nowMs = 2_000L))
+    }
+
+    @Test
+    fun cameraStormIsRateLimitedButRoadSafetyAlertCanInterrupt() {
+        val userLat = 39.0
+        val userLon = -104.0
+        fun camera(key: Long, meters: Double, kind: SensorKind): FlockCamera {
+            val at = FlockApproach.destination(userLat, userLon, 0.0, meters)
+            return FlockCamera(key, at.first, at.second, emptyList(), kind = kind)
+        }
+        val latch = FlockLatch()
+        assertEquals(
+            SensorKind.CAMERA,
+            latch.consider(
+                userLat, userLon, 0.0, 12.0,
+                listOf(camera(1L, 100.0, SensorKind.CAMERA)),
+                nowMs = 1_000L,
+            )?.kind,
+        )
+        assertNull(
+            latch.consider(
+                userLat, userLon, 0.0, 12.0,
+                listOf(camera(2L, 120.0, SensorKind.CAMERA)),
+                nowMs = 2_000L,
+            ),
+        )
+        assertEquals(
+            SensorKind.RED,
+            latch.consider(
+                userLat, userLon, 0.0, 12.0,
+                listOf(camera(3L, 140.0, SensorKind.RED)),
+                nowMs = 3_000L,
+            )?.kind,
+        )
+    }
+
+    @Test
     fun compactFileRoundTripsAndAShortParseDoesNotReplaceIt() {
         val dir = tempDir()
         val cameras = List(FlockApproach.MIN_COUNT) { i ->

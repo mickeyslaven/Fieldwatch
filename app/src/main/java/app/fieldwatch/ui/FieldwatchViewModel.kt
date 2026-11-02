@@ -230,6 +230,8 @@ data class FieldwatchUi(
     val catalogVersion: Int = 0,
     /** Phone GPS while Show live path is on this view. Empty when the band is off. Windowed. */
     val operatorPath: List<GpsSample> = emptyList(),
+    /** Short, always-available trail for the car dashboard map. */
+    val drivePath: List<GpsSample> = emptyList(),
     /** Start of the live-map window. Sit start, or the later of switch-on and 15 minutes ago. */
     val livePathSince: Long = Long.MIN_VALUE,
     /** Watchlist alerts drawn on the live map. Not the filtered list. */
@@ -286,12 +288,17 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
     val pathZoomIn: StateFlow<Boolean> = _pathZoomIn
     private val _livePathTiles = MutableStateFlow<List<PathTiles.Tile>>(emptyList())
     val livePathTiles: StateFlow<List<PathTiles.Tile>> = _livePathTiles
+    private val _driveTiles = MutableStateFlow<List<PathTiles.Tile>>(emptyList())
+    val driveTiles: StateFlow<List<PathTiles.Tile>> = _driveTiles
+    private val _driveZoomIn = MutableStateFlow(false)
+    val driveZoomIn: StateFlow<Boolean> = _driveZoomIn
     /** Zoom or compass tap. Shown at once. The settings file catches up after. */
     private val _shownMapFrame = MutableStateFlow<Int?>(null)
     val shownMapFrame: StateFlow<Int?> = _shownMapFrame.asStateFlow()
     private val _livePathZoomIn = MutableStateFlow(false)
     val livePathZoomIn: StateFlow<Boolean> = _livePathZoomIn
     private val liveFlight = MapFlight()
+    private val driveFlight = MapFlight()
     private val _huntTiles = MutableStateFlow<List<PathTiles.Tile>>(emptyList())
     val huntTiles: StateFlow<List<PathTiles.Tile>> = _huntTiles
     private val _huntZoomIn = MutableStateFlow(false)
@@ -550,8 +557,9 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         val arrivalsOn = config.filter.arrivalsOnly && arr.active
         val learning = arrivalsOn && now <= arr.learningUntil
         var hiddenKnown = 0
+        val fullOperatorPath = app.operatorPathCopy()
         val moveCtx = if (config.filter.movingWithYou) {
-            CoTravel.Ctx.of(app.operatorPathCopy())
+            CoTravel.Ctx.of(fullOperatorPath)
         } else {
             CoTravel.Ctx.None
         }
@@ -647,7 +655,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         val pathSamples = when {
             !pathOn -> emptyList()
             openPath != null -> openPath.samples
-            else -> SitPathPlot.livePathSamples(app.operatorPathCopy(), pathSince, livePathMark)
+            else -> SitPathPlot.livePathSamples(fullOperatorPath, pathSince, livePathMark)
         }
         val pathRadios = when {
             !pathOn -> emptyList()
@@ -655,6 +663,13 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             else -> SitPathPlot.livePathRadios(labeled, pathSince, alertKeys, watchedFleets, hiddenFlood)
         }
         val phone = app.currentFix()
+        val drivePath = if (config.settings.viewMode == ViewMode.DRIVE) {
+            fullOperatorPath.takeLast(180).ifEmpty {
+                if (phone == null) emptyList() else listOf(GpsSample(now, phone.first, phone.second))
+            }
+        } else {
+            emptyList()
+        }
         FieldwatchUi(
             devices = labeled,
             filtered = filtered,
@@ -686,6 +701,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             takInstallTag = config.takInstallTag,
             catalogVersion = config.version,
             operatorPath = pathSamples,
+            drivePath = drivePath,
             livePathSince = pathSince,
             livePathRadios = pathRadios,
             phoneLat = phone?.first,
@@ -884,7 +900,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
                 _driveNotices.update { old ->
                     (listOf(DriveNotice(now, text)) + old)
                         .filter { now - it.at <= 15 * 60_000L }
-                        .take(12)
+                        .take(8)
                 }
             }
         }
@@ -1311,6 +1327,27 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    /**
+     * Follow-map tiles for Drive mode. Cached images and an ADB-installed offline pack
+     * remain visible with Online place names and maps switched off.
+     */
+    fun refreshDriveArea(
+        south: Double,
+        north: Double,
+        west: Double,
+        east: Double,
+        online: Boolean,
+        basemap: MapBasemap,
+        overlays: Set<MapOverlay> = emptySet(),
+    ) {
+        refreshArea(
+            driveFlight, _driveTiles, _driveZoomIn, live = false,
+            south, north, west, east, online, basemap, overlays, held = false,
+            prefetch = false,
+            cachedWhenOffline = true,
+        )
+    }
+
     /** Street tiles under the Hunt cloud. A held view uses [refreshHuntViewport]. */
     fun refreshHuntTiles(
         samples: List<GpsSample>,
@@ -1411,6 +1448,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         val east: Double,
         val basemap: MapBasemap,
         val overlays: Set<MapOverlay>,
+        val allowNetwork: Boolean,
         val key: String,
         val held: Boolean,
     )
@@ -1449,14 +1487,15 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         overlays: Set<MapOverlay>,
         held: Boolean,
         prefetch: Boolean = true,
+        cachedWhenOffline: Boolean = false,
     ) {
-        if (!online) {
+        if (!online && !cachedWhenOffline) {
             cancelFlight(flight, live, prefetch)
             tiles.value = emptyList()
             zoomIn.value = false
             return
         }
-        if (missingMapKey(basemap)) {
+        if (online && missingMapKey(basemap)) {
             cancelFlight(flight, live, prefetch)
             flight.key = "missing:${basemap.name}:${app.mapKeys.revision.value}"
             tiles.value = emptyList()
@@ -1465,7 +1504,8 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
         val coverage = PathTiles.coverageKey(south, north, west, east, basemap)
-        val key = tileRequestKey(basemap, overlays, "v:$coverage")
+        val source = if (online) "net" else "cache"
+        val key = tileRequestKey(basemap, overlays, "$source:v:$coverage")
         if (coverage == "zoom") {
             cancelFlight(flight, live, prefetch)
             flight.key = key
@@ -1474,7 +1514,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
         if (key.endsWith(":off")) return
-        val ticket = AreaTicket(south, north, west, east, basemap, overlays, key, held)
+        val ticket = AreaTicket(south, north, west, east, basemap, overlays, online, key, held)
         if (key == flight.key) {
             flight.pending = null
             flight.held = held
@@ -1519,7 +1559,8 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
                     north = ticket.north,
                     west = ticket.west,
                     east = ticket.east,
-                    onlineLookup = true,
+                    onlineLookup = ticket.allowNetwork,
+                    cachedOnly = !ticket.allowNetwork,
                     basemap = ticket.basemap,
                     mapKey = keyFor(ticket.basemap),
                     overlays = ticket.overlays,

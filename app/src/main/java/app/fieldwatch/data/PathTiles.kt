@@ -113,13 +113,15 @@ object PathTiles {
         west: Double,
         east: Double,
         onlineLookup: Boolean,
+        /** Read an installed offline pack even when online maps are switched off. */
+        cachedOnly: Boolean = false,
         basemap: MapBasemap = MapBasemap.OSM,
         mapKey: String? = null,
         overlays: Set<MapOverlay> = emptySet(),
         onTile: (suspend (Tile) -> Unit)? = null,
     ): Batch = withContext(Dispatchers.IO) {
         try {
-            if (!onlineLookup) return@withContext Batch()
+            if (!onlineLookup && !cachedOnly) return@withContext Batch()
             loadBox(
                 context,
                 south,
@@ -130,7 +132,7 @@ object PathTiles {
                 mapKey = mapKey,
                 overlays = overlays,
                 onTile = onTile,
-                allowNetwork = PlaceLookup.online(context),
+                allowNetwork = onlineLookup && PlaceLookup.online(context),
             )
         } catch (e: CancellationException) {
             throw e
@@ -263,7 +265,9 @@ object PathTiles {
         onTile: (suspend (Tile) -> Unit)? = null,
         allowNetwork: Boolean = true,
     ): Batch {
-        val blocked = blockedKey(basemap, mapKey)
+        // A key is only needed to contact a keyed service. Cached/offline-pack tiles are
+        // ordinary images and must remain usable with no network and no saved token.
+        val blocked = if (allowNetwork) blockedKey(basemap, mapKey) else null
         if (blocked != null) return Batch(problem = blocked)
         val plan = when (val planned = planFor(south, north, west, east, forPrint, basemap)) {
             Plan.None -> return Batch()
@@ -585,6 +589,13 @@ object PathTiles {
         mapKey: String?,
         allowNetwork: Boolean = true,
     ): Fetch {
+        val offline = context.getExternalFilesDir(null)?.let {
+            offlineTileFile(it, cacheName, z, x, y)
+        }
+        if (offline?.isFile == true && offline.length() > 64) {
+            val packed = BitmapFactory.decodeFile(offline.absolutePath)
+            if (packed != null) return Fetch.Picture(packed)
+        }
         val file = tileFile(context, cacheName, z, x, y)
         if (file.isFile && file.length() > 64) {
             val cached = BitmapFactory.decodeFile(file.absolutePath)
@@ -654,6 +665,10 @@ object PathTiles {
 
     /** Saved pictures for every map and overlay. Android cache cleaning does not remove this folder. */
     private const val TILE_ROOT = "map-tiles"
+
+    /** Path accepted for an ADB-installed offline pack under the app's external files. */
+    internal fun offlineTileFile(root: File, cacheName: String, z: Int, x: Int, y: Int): File =
+        File(root, "$TILE_ROOT/$cacheName/${z}_${x}_$y.png")
 
     /** Oldest pictures are deleted after this. 512 MB. */
     internal const val MAX_CACHE_BYTES = 512L * 1024L * 1024L

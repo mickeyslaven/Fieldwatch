@@ -29,8 +29,8 @@ android {
         applicationId = "app.fieldwatch"
         minSdk = 24
         targetSdk = 35
-        versionCode = 50
-        versionName = "1.1.39-shield7.1-drive"
+        versionCode = 51
+        versionName = "1.1.40-shield7.1-map"
         vectorDrawables.useSupportLibrary = true
     }
 

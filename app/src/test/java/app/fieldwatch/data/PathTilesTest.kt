@@ -14,6 +14,15 @@ import org.junit.Test
 
 class PathTilesTest {
     @Test
+    fun offlinePackUsesTheAdbFriendlyExternalFilesLayout() {
+        val root = File("/sdcard/Android/data/app.fieldwatch/files")
+        assertEquals(
+            "/sdcard/Android/data/app.fieldwatch/files/map-tiles/osm/15_9321_12345.png",
+            PathTiles.offlineTileFile(root, "osm", 15, 9321, 12345).path,
+        )
+    }
+
+    @Test
     fun oldestTilesAreDroppedWhenTheCacheIsFull() {
         val root = File(System.getProperty("java.io.tmpdir"), "fw-tiles-" + System.nanoTime())
         root.mkdirs()

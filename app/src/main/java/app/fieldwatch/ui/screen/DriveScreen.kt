@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -51,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,13 +71,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.fieldwatch.domain.DriveContact
 import app.fieldwatch.domain.DriveDeck
 import app.fieldwatch.domain.MacUtil
+import app.fieldwatch.domain.MapFrame
 import app.fieldwatch.domain.Palette
 import app.fieldwatch.domain.Sighting
+import app.fieldwatch.domain.SitPathPlot
 import app.fieldwatch.ui.FieldwatchUi
 import app.fieldwatch.ui.FieldwatchViewModel
 import app.fieldwatch.ui.RadioClassBadge
 import app.fieldwatch.ui.component.RssiBar
+import app.fieldwatch.ui.component.SitPathCanvas
 import app.fieldwatch.ui.component.TrendMark
+import app.fieldwatch.ui.component.rememberMapFooter
 import app.fieldwatch.ui.component.rssiColor
 import kotlinx.coroutines.delay
 
@@ -87,7 +93,6 @@ fun DriveView(
     flashKeys: Set<String>,
 ) {
     val gnssNotice by vm.gnssNotice.collectAsStateWithLifecycle()
-    val gnssStatus by vm.gnssStatus.collectAsStateWithLifecycle()
     val mappedNotices by vm.driveNotices.collectAsStateWithLifecycle()
     val fullscreen by vm.driveFullscreen.collectAsStateWithLifecycle()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -101,8 +106,11 @@ fun DriveView(
         DriveDeck.snapshot(state.devices, state.fleets, state.watchlist, state.alertAt, now)
     }
     val gnssActive = gnssNotice?.let { !it.ended && it.line.isNotBlank() } == true
-    val currentNotices = mappedNotices.filter { now - it.at <= DriveDeck.RECENT_MS }
-    val activeCount = snapshot.active.size + if (gnssActive) 1 else 0
+    val currentNotices = mappedNotices.filter { now - it.at <= DriveDeck.RECENT_MS }.take(8)
+    val mappedActive = currentNotices.firstOrNull()?.let { now - it.at <= 12_000L } == true
+    val activeCount = snapshot.active.size +
+        (if (gnssActive) 1 else 0) +
+        (if (mappedActive) 1 else 0)
     val mode = when {
         state.scanBlocked -> DriveHeroMode.BLOCKED
         !state.scanning -> DriveHeroMode.STARTING
@@ -118,15 +126,15 @@ fun DriveView(
                 Modifier.fillMaxSize().padding(14.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                DriveSummary(
+                DriveMapPanel(
                     state = state,
+                    vm = vm,
                     mode = mode,
                     activeCount = activeCount,
-                    gnssStatus = gnssStatus,
-                    gnssLine = gnssNotice?.line.orEmpty(),
                     totalActive = snapshot.totalActive,
-                    unmatchedActive = snapshot.unmatchedActive,
-                    modifier = Modifier.weight(0.40f).fillMaxHeight(),
+                    mapped = currentNotices,
+                    mappedActive = mappedActive,
+                    modifier = Modifier.weight(0.64f).fillMaxHeight(),
                 )
                 DriveAlertFeed(
                     active = snapshot.active,
@@ -134,11 +142,13 @@ fun DriveView(
                     mapped = currentNotices,
                     gnssLine = gnssNotice?.line.orEmpty(),
                     gnssActive = gnssActive,
+                    gnssEnabled = state.settings.gnssMonitor,
+                    gnssVoice = state.settings.gnssVoice,
                     vm = vm,
                     now = now,
                     flashKeys = flashKeys,
                     onOpen = onOpen,
-                    modifier = Modifier.weight(0.60f).fillMaxHeight(),
+                    modifier = Modifier.weight(0.36f).fillMaxHeight(),
                 )
             }
         } else {
@@ -146,16 +156,15 @@ fun DriveView(
                 Modifier.fillMaxSize().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                DriveSummary(
+                DriveMapPanel(
                     state = state,
+                    vm = vm,
                     mode = mode,
                     activeCount = activeCount,
-                    gnssStatus = gnssStatus,
-                    gnssLine = gnssNotice?.line.orEmpty(),
                     totalActive = snapshot.totalActive,
-                    unmatchedActive = snapshot.unmatchedActive,
-                    modifier = Modifier.fillMaxWidth(),
-                    compact = true,
+                    mapped = currentNotices,
+                    mappedActive = mappedActive,
+                    modifier = Modifier.weight(0.62f).fillMaxWidth(),
                 )
                 DriveAlertFeed(
                     active = snapshot.active,
@@ -163,17 +172,19 @@ fun DriveView(
                     mapped = currentNotices,
                     gnssLine = gnssNotice?.line.orEmpty(),
                     gnssActive = gnssActive,
+                    gnssEnabled = state.settings.gnssMonitor,
+                    gnssVoice = state.settings.gnssVoice,
                     vm = vm,
                     now = now,
                     flashKeys = flashKeys,
                     onOpen = onOpen,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier.weight(0.38f).fillMaxWidth(),
                 )
             }
         }
         Surface(
             modifier = Modifier
-                .align(Alignment.TopEnd)
+                .align(Alignment.BottomEnd)
                 .padding(18.dp)
                 .size(58.dp)
                 .border(
@@ -194,6 +205,178 @@ fun DriveView(
                     modifier = Modifier.size(32.dp),
                     tint = MaterialTheme.colorScheme.primary,
                 )
+            }
+        }
+    }
+}
+
+/** Low-memory, course-up dashboard map with clustered mapped sensors. */
+@Composable
+private fun DriveMapPanel(
+    state: FieldwatchUi,
+    vm: FieldwatchViewModel,
+    mode: DriveHeroMode,
+    activeCount: Int,
+    totalActive: Int,
+    mapped: List<app.fieldwatch.ui.DriveNotice>,
+    mappedActive: Boolean,
+    modifier: Modifier,
+) {
+    val tiles by vm.driveTiles.collectAsStateWithLifecycle()
+    val zoomIn by vm.driveZoomIn.collectAsStateWithLifecycle()
+    val flockRevision by vm.flockRevision.collectAsStateWithLifecycle()
+    val mapKeyRevision by vm.mapKeyRevision.collectAsStateWithLifecycle()
+    var tileWindow by remember { mutableStateOf<DoubleArray?>(null) }
+    var northUp by remember { mutableStateOf(false) }
+    val tileWindowKey = tileWindow?.let { SitPathPlot.tileWindowKey(it) }.orEmpty()
+    val basemap = state.settings.mapBasemap
+    val overlays = state.settings.mapOverlays
+    val online = state.settings.onlineLookup
+    LaunchedEffect(tileWindowKey, online, basemap, overlays, mapKeyRevision) {
+        val window = tileWindow ?: return@LaunchedEffect
+        vm.refreshDriveArea(
+            window[0], window[1], window[2], window[3],
+            online, basemap, overlays,
+        )
+    }
+    val model = remember(state.drivePath) {
+        SitPathPlot.Model(
+            samples = state.drivePath,
+            dots = emptyList(),
+            lengthM = 0.0,
+            spanM = 0.0,
+            title = "",
+            live = true,
+        )
+    }
+    val accent = when (mode) {
+        DriveHeroMode.CLEAR -> Color(0xFF42F5A7)
+        DriveHeroMode.ALERT, DriveHeroMode.BLOCKED -> MaterialTheme.colorScheme.error
+        DriveHeroMode.STARTING -> Color(0xFFFFB020)
+    }
+    val pulse = rememberInfiniteTransition(label = "drive-map-alert")
+    val glow by pulse.animateFloat(
+        initialValue = 0.40f,
+        targetValue = if (mode == DriveHeroMode.ALERT) 1f else 0.65f,
+        animationSpec = infiniteRepeatable(
+            tween(if (mode == DriveHeroMode.ALERT) 620 else 1_700),
+            RepeatMode.Reverse,
+        ),
+        label = "drive-map-glow",
+    )
+    val status = when {
+        mappedActive -> "CAMERA ALERT"
+        mode == DriveHeroMode.ALERT -> if (activeCount == 1) "ACTIVE ALERT" else "$activeCount ACTIVE ALERTS"
+        mode == DriveHeroMode.BLOCKED -> "SCANNER BLOCKED"
+        mode == DriveHeroMode.STARTING -> "STARTING SCANNERS"
+        else -> "ALL CLEAR"
+    }
+
+    Surface(
+        modifier = modifier.border(2.dp, accent.copy(alpha = glow), RoundedCornerShape(22.dp)),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 4.dp,
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            if (model.samples.isEmpty()) {
+                Column(
+                    Modifier.align(Alignment.Center).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.GpsFixed,
+                        contentDescription = null,
+                        tint = Color(0xFFFFB020),
+                        modifier = Modifier.size(54.dp),
+                    )
+                    Text(
+                        "WAITING FOR GPS",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            } else {
+                SitPathCanvas(
+                    model = model,
+                    modifier = Modifier.fillMaxSize(),
+                    tiles = tiles,
+                    expand = true,
+                    position = rememberMapFooter(
+                        state.settings.mapFooter,
+                        state.phoneLat,
+                        state.phoneLon,
+                        state.settings.demoMode,
+                    ),
+                    courseDeg = state.travelDeg,
+                    mapFrame = if (northUp) MapFrame.CLOSE_NORTH else MapFrame.CLOSE,
+                    onRotate = { northUp = !northUp },
+                    fitButton = false,
+                    zoomIn = zoomIn,
+                    flock = state.settings.flockLayer || state.settings.sensorLayer,
+                    flockIndex = vm.flockIndex,
+                    flockRevision = flockRevision,
+                    onTileWindow = { next ->
+                        if (SitPathPlot.tileWindowKey(next) != tileWindowKey) tileWindow = next
+                    },
+                )
+            }
+
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(14.dp)
+                    .widthIn(max = 430.dp)
+                    .border(2.dp, accent.copy(alpha = glow), RoundedCornerShape(18.dp)),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.93f),
+                shadowElevation = 8.dp,
+            ) {
+                Column(
+                    Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    AnimatedContent(targetState = status, label = "drive-map-status") { shown ->
+                        Text(
+                            shown,
+                            color = accent,
+                            fontSize = 27.sp,
+                            lineHeight = 29.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.2.sp,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        DriveStatPill(Icons.Outlined.Sensors, "$totalActive on air")
+                        DriveStatPill(
+                            Icons.Outlined.GpsFixed,
+                            if (online) "LIVE MAP" else "OFFLINE MAP",
+                        )
+                    }
+                }
+            }
+
+            val latest = mapped.firstOrNull()
+            AnimatedVisibility(
+                visible = latest != null,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(14.dp)
+                    .widthIn(max = 470.dp),
+                enter = fadeIn(tween(220)) + slideInHorizontally(tween(260)) { -it / 3 },
+                exit = fadeOut(tween(180)),
+            ) {
+                if (latest != null) {
+                    DriveTextAlertCard(
+                        title = "MAPPED SENSOR",
+                        body = latest.text,
+                        active = mappedActive,
+                        icon = Icons.Outlined.Videocam,
+                        age = ageLabel(System.currentTimeMillis() - latest.at),
+                    )
+                }
             }
         }
     }
@@ -343,12 +526,15 @@ private fun DriveAlertFeed(
     mapped: List<app.fieldwatch.ui.DriveNotice>,
     gnssLine: String,
     gnssActive: Boolean,
+    gnssEnabled: Boolean,
+    gnssVoice: Boolean,
     vm: FieldwatchViewModel,
     now: Long,
     flashKeys: Set<String>,
     onOpen: (Sighting) -> Unit,
     modifier: Modifier,
 ) {
+    val mappedNow = mapped.firstOrNull()?.let { now - it.at <= 12_000L } == true
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(22.dp),
@@ -361,7 +547,7 @@ private fun DriveAlertFeed(
         ) {
             item {
                 Text(
-                    if (active.isEmpty() && !gnssActive) "RECENT EVENTS" else "LIVE ALERTS",
+                    if (active.isEmpty() && !gnssActive && !mappedNow) "RECENT EVENTS" else "LIVE ALERTS",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Black,
                     letterSpacing = 1.sp,
@@ -376,6 +562,37 @@ private fun DriveAlertFeed(
                         active = true,
                         icon = Icons.Outlined.GpsFixed,
                     )
+                }
+            }
+            if (!gnssActive && gnssEnabled) {
+                item("gnss-armed") {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFF42F5A7).copy(alpha = 0.08f),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.GpsFixed,
+                                contentDescription = null,
+                                tint = Color(0xFF42F5A7),
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                if (gnssVoice) {
+                                    "GNSS monitor quiet · voice alerts armed"
+                                } else {
+                                    "GNSS monitor quiet"
+                                },
+                                color = Color(0xFF42F5A7),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
                 }
             }
             items(active, key = { "active-${it.device.key}" }) { contact ->
@@ -410,7 +627,7 @@ private fun DriveAlertFeed(
                     title = "MAPPED SENSOR",
                     body = notice.text,
                     age = ageLabel(now - notice.at),
-                    active = false,
+                    active = mappedNow && notice == mapped.firstOrNull(),
                     icon = Icons.Outlined.Videocam,
                 )
             }

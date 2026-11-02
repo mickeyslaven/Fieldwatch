@@ -111,6 +111,8 @@ object FlockApproach {
     const val MIN_COUNT = 1_000
     const val MAX_FACINGS = 4
     const val MARK_CAP = 250
+    /** Prevent speech, vibration, notification, and animation storms in dense sensor areas. */
+    const val MIN_ALERT_GAP_MS = 15_000L
 
     enum class Kind { AHEAD, LOOKING }
 
@@ -171,9 +173,15 @@ object FlockApproach {
  */
 class FlockLatch {
     private val quiet = HashSet<Long>()
+    private var lastAlertAt = Long.MIN_VALUE
+    private var lastAlertKey = Long.MIN_VALUE
+    private var lastAlertPriority = Int.MIN_VALUE
 
     fun clear() {
         quiet.clear()
+        lastAlertAt = Long.MIN_VALUE
+        lastAlertKey = Long.MIN_VALUE
+        lastAlertPriority = Int.MIN_VALUE
     }
 
     fun consider(
@@ -182,11 +190,13 @@ class FlockLatch {
         courseDeg: Double,
         speedMps: Double?,
         nearby: List<FlockCamera>,
+        nowMs: Long = System.currentTimeMillis(),
     ): FlockHit? {
         val stay = HashSet<Long>()
         var best: FlockCamera? = null
         var bestLooking = false
         var bestDist = Double.POSITIVE_INFINITY
+        var bestPriority = Int.MIN_VALUE
         for (cam in nearby) {
             val dist = Geo.meters(lat, lon, cam.lat, cam.lon)
             if (dist > FlockApproach.REARM_M) continue
@@ -195,16 +205,48 @@ class FlockLatch {
             val kind = FlockApproach.classify(
                 lat, lon, courseDeg, speedMps, cam.lat, cam.lon, cam.facings,
             ) ?: continue
-            if (dist < bestDist) {
+            val priority = alertPriority(cam.kind)
+            val looking = kind == FlockApproach.Kind.LOOKING
+            if (
+                priority > bestPriority ||
+                (priority == bestPriority && looking && !bestLooking) ||
+                (priority == bestPriority && looking == bestLooking && dist < bestDist)
+            ) {
                 best = cam
                 bestDist = dist
-                bestLooking = kind == FlockApproach.Kind.LOOKING
+                bestLooking = looking
+                bestPriority = priority
             }
         }
         quiet.retainAll(stay)
         val hit = best ?: return null
-        quiet.add(hit.key)
+
+        // One warning acknowledges the whole nearby zone, not one database row. Without
+        // this, a dense block can start a different TTS/vibration/notification on every
+        // GPS fix and overwhelm older devices even though the visible notice list is capped.
+        quiet.addAll(stay)
+
+        val since = if (lastAlertAt == Long.MIN_VALUE) Long.MAX_VALUE else nowMs - lastAlertAt
+        if (
+            hit.key != lastAlertKey &&
+            since in 0 until FlockApproach.MIN_ALERT_GAP_MS &&
+            bestPriority <= lastAlertPriority
+        ) {
+            return null
+        }
+        lastAlertAt = nowMs
+        lastAlertKey = hit.key
+        lastAlertPriority = bestPriority
         return FlockHit(hit.key, bestLooking, hit.flock, hit.brand, hit.kind)
+    }
+
+    /** Road-safety cameras may interrupt a lower-priority generic/plate-reader warning. */
+    private fun alertPriority(kind: SensorKind): Int = when (kind) {
+        SensorKind.RED -> 5
+        SensorKind.SPEED -> 4
+        SensorKind.PLATE -> 3
+        SensorKind.CAMERA -> 2
+        SensorKind.GUNSHOT -> 1
     }
 }
 
