@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -70,6 +71,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.fieldwatch.domain.DriveContact
 import app.fieldwatch.domain.DriveDeck
+import app.fieldwatch.domain.DriveMapMotion
+import app.fieldwatch.domain.GpsSample
 import app.fieldwatch.domain.MacUtil
 import app.fieldwatch.domain.MapFrame
 import app.fieldwatch.domain.Palette
@@ -115,6 +118,7 @@ fun DriveView(
         state.scanBlocked -> DriveHeroMode.BLOCKED
         !state.scanning -> DriveHeroMode.STARTING
         activeCount > 0 -> DriveHeroMode.ALERT
+        state.drivePath.isEmpty() -> DriveHeroMode.WAITING_GPS
         else -> DriveHeroMode.CLEAR
     }
 
@@ -239,7 +243,7 @@ private fun DriveMapPanel(
             online, basemap, overlays,
         )
     }
-    val model = remember(state.drivePath) {
+    val rawModel = remember(state.drivePath) {
         SitPathPlot.Model(
             samples = state.drivePath,
             dots = emptyList(),
@@ -249,11 +253,18 @@ private fun DriveMapPanel(
             live = true,
         )
     }
-    val accent = when (mode) {
+    val smoothPath = rememberSmoothDrivePath(state.drivePath)
+    val model = remember(rawModel, smoothPath) { rawModel.copy(samples = smoothPath) }
+    val targetAccent = when (mode) {
         DriveHeroMode.CLEAR -> Color(0xFF42F5A7)
         DriveHeroMode.ALERT, DriveHeroMode.BLOCKED -> MaterialTheme.colorScheme.error
-        DriveHeroMode.STARTING -> Color(0xFFFFB020)
+        DriveHeroMode.STARTING, DriveHeroMode.WAITING_GPS -> Color(0xFFFFB020)
     }
+    val accent by animateColorAsState(
+        targetValue = targetAccent,
+        animationSpec = tween(320),
+        label = "drive-map-border",
+    )
     val pulse = rememberInfiniteTransition(label = "drive-map-alert")
     val glow by pulse.animateFloat(
         initialValue = 0.40f,
@@ -268,12 +279,13 @@ private fun DriveMapPanel(
         mappedActive -> "CAMERA ALERT"
         mode == DriveHeroMode.ALERT -> if (activeCount == 1) "ACTIVE ALERT" else "$activeCount ACTIVE ALERTS"
         mode == DriveHeroMode.BLOCKED -> "SCANNER BLOCKED"
+        mode == DriveHeroMode.WAITING_GPS -> "WAITING FOR GPS"
         mode == DriveHeroMode.STARTING -> "STARTING SCANNERS"
         else -> "ALL CLEAR"
     }
 
     Surface(
-        modifier = modifier.border(2.dp, accent.copy(alpha = glow), RoundedCornerShape(22.dp)),
+        modifier = modifier.border(3.dp, accent.copy(alpha = glow), RoundedCornerShape(22.dp)),
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 4.dp,
@@ -315,6 +327,8 @@ private fun DriveMapPanel(
                     onRotate = { northUp = !northUp },
                     fitButton = false,
                     zoomIn = zoomIn,
+                    followAheadM = MapFrame.DRIVE_LOOK_AHEAD_M,
+                    tileModel = rawModel,
                     flock = state.settings.flockLayer || state.settings.sensorLayer,
                     flockIndex = vm.flockIndex,
                     flockRevision = flockRevision,
@@ -382,7 +396,50 @@ private fun DriveMapPanel(
     }
 }
 
-private enum class DriveHeroMode { CLEAR, ALERT, STARTING, BLOCKED }
+/**
+ * Ease only the drawn tip of the route. Alert range, direction, and speech keep using the
+ * unsmoothed location in FieldwatchApp, so a pretty map can never delay a warning.
+ */
+@Composable
+private fun rememberSmoothDrivePath(samples: List<GpsSample>): List<GpsSample> {
+    val raw = samples.lastOrNull()
+    var shown by remember { mutableStateOf(raw) }
+
+    LaunchedEffect(raw?.at, raw?.lat, raw?.lon) {
+        val target = raw
+        if (target == null) {
+            shown = null
+            return@LaunchedEffect
+        }
+        val from = shown
+        if (DriveMapMotion.shouldSnap(from, target)) {
+            shown = target
+            return@LaunchedEffect
+        }
+        val settled = DriveMapMotion.quieted(from!!, target)
+        if (settled.lat == from.lat && settled.lon == from.lon) {
+            shown = settled
+            return@LaunchedEffect
+        }
+        val duration = DriveMapMotion.glideMs(from, settled)
+        val frames = ((duration + DriveMapMotion.FRAME_MS - 1L) / DriveMapMotion.FRAME_MS)
+            .coerceAtLeast(1L)
+            .toInt()
+        val frameDelay = (duration / frames).coerceAtLeast(1L)
+        for (frame in 1..frames) {
+            delay(frameDelay)
+            shown = DriveMapMotion.interpolate(from, settled, frame.toFloat() / frames)
+        }
+    }
+
+    val endpoint = shown
+    return remember(samples, endpoint) {
+        if (samples.isEmpty() || endpoint == null) emptyList()
+        else samples.dropLast(1) + endpoint
+    }
+}
+
+private enum class DriveHeroMode { CLEAR, ALERT, STARTING, WAITING_GPS, BLOCKED }
 
 @Composable
 private fun DriveSummary(
@@ -399,7 +456,7 @@ private fun DriveSummary(
     val accent = when (mode) {
         DriveHeroMode.CLEAR -> Color(0xFF42F5A7)
         DriveHeroMode.ALERT, DriveHeroMode.BLOCKED -> MaterialTheme.colorScheme.error
-        DriveHeroMode.STARTING -> Color(0xFFFFB020)
+        DriveHeroMode.STARTING, DriveHeroMode.WAITING_GPS -> Color(0xFFFFB020)
     }
     val pulse = rememberInfiniteTransition(label = "drive-status")
     val glow by pulse.animateFloat(
@@ -424,12 +481,14 @@ private fun DriveSummary(
         DriveHeroMode.CLEAR -> "ALL CLEAR"
         DriveHeroMode.ALERT -> if (activeCount == 1) "1 ACTIVE ALERT" else "$activeCount ACTIVE ALERTS"
         DriveHeroMode.STARTING -> "STARTING SCANNERS"
+        DriveHeroMode.WAITING_GPS -> "WAITING FOR GPS"
         DriveHeroMode.BLOCKED -> "SCANNER BLOCKED"
     }
     val subtitle = when (mode) {
         DriveHeroMode.CLEAR -> "Watchlist and GNSS monitor are quiet"
         DriveHeroMode.ALERT -> "Voice alert issued · details at right"
         DriveHeroMode.STARTING -> "Waiting for Wi-Fi and Bluetooth radios"
+        DriveHeroMode.WAITING_GPS -> "Map stays ready while location settles"
         DriveHeroMode.BLOCKED -> "Open Diagnostics from Settings"
     }
 
@@ -813,7 +872,7 @@ private fun SignalSweepBackground(mode: DriveHeroMode) {
     val color = when (mode) {
         DriveHeroMode.CLEAR -> Color(0xFF42F5A7)
         DriveHeroMode.ALERT, DriveHeroMode.BLOCKED -> MaterialTheme.colorScheme.error
-        DriveHeroMode.STARTING -> Color(0xFFFFB020)
+        DriveHeroMode.STARTING, DriveHeroMode.WAITING_GPS -> Color(0xFFFFB020)
     }
     Canvas(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         val grid = color.copy(alpha = 0.045f)

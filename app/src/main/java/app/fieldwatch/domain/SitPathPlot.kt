@@ -488,6 +488,8 @@ object SitPathPlot {
          * 0 fits the whole picture. A held view ignores this.
          */
         followHalfM: Float = 0f,
+        /** Move the follow center this far up-course so the phone sits below center. */
+        followAheadM: Float = 0f,
         /** Degrees clockwise from north. NaN stays north-up. */
         courseDeg: Double = Double.NaN,
     ): Layout? {
@@ -501,6 +503,18 @@ object SitPathPlot {
         } else {
             null
         }
+        val followCenter = if (
+            anchor != null && followAheadM > 0f && courseDeg.isFinite()
+        ) {
+            FlockApproach.destination(
+                anchor.lat,
+                anchor.lon,
+                courseDeg,
+                followAheadM.toDouble(),
+            )
+        } else {
+            anchor?.let { it.lat to it.lon }
+        }
         val pts = phone + model.frameSamples
         if (held == null && anchor == null && pts.isEmpty() && model.dots.isEmpty()) return null
         val lat0: Double
@@ -508,9 +522,9 @@ object SitPathPlot {
         if (held != null) {
             lat0 = held.centerLat
             lon0 = held.centerLon
-        } else if (anchor != null) {
-            lat0 = anchor.lat
-            lon0 = anchor.lon
+        } else if (followCenter != null) {
+            lat0 = followCenter.first
+            lon0 = followCenter.second
         } else if (pts.isNotEmpty()) {
             lat0 = pts.map { it.lat }.average()
             lon0 = pts.map { it.lon }.average()

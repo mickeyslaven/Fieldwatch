@@ -135,6 +135,10 @@ fun SitPathCanvas(
     fitButton: Boolean = true,
     /** Blank picture because this map starts at a closer zoom. */
     zoomIn: Boolean = false,
+    /** Close-follow distance placed above the phone. Zero keeps the phone centered. */
+    followAheadM: Float = 0f,
+    /** Optional unsmoothed model used only to decide when the tile window advances. */
+    tileModel: SitPathPlot.Model? = null,
     /** Live layer on Show live path and Hunt. Reports → Path passes [pathCameras] instead. */
     flock: Boolean = false,
     flockIndex: app.fieldwatch.domain.FlockIndex? = null,
@@ -202,7 +206,7 @@ fun SitPathCanvas(
     }
     // Drawn angle turns through the gap between GPS courses. Tiles stay on the heading reached.
     val drawnCourse = rememberEasedCourse(appliedCourse)
-    val layout = remember(model, boxSize, viewport, drawnCourse, followHalfM) {
+    val layout = remember(model, boxSize, viewport, drawnCourse, followHalfM, followAheadM) {
         if (boxSize.width < 8 || boxSize.height < 8) null
         else SitPathPlot.layout(
             model,
@@ -210,17 +214,20 @@ fun SitPathCanvas(
             boxSize.height.toFloat(),
             viewport = viewport,
             followHalfM = followHalfM,
+            followAheadM = followAheadM,
             courseDeg = drawnCourse,
         )
     }
-    val tileLayout = remember(model, boxSize, viewport, appliedCourse, followHalfM) {
+    val tileSource = tileModel ?: model
+    val tileLayout = remember(tileSource, boxSize, viewport, appliedCourse, followHalfM, followAheadM) {
         if (boxSize.width < 8 || boxSize.height < 8) null
         else SitPathPlot.layout(
-            model,
+            tileSource,
             boxSize.width.toFloat(),
             boxSize.height.toFloat(),
             viewport = viewport,
             followHalfM = followHalfM,
+            followAheadM = followAheadM,
             courseDeg = appliedCourse,
         )
     }

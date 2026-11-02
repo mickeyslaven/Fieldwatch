@@ -1107,6 +1107,9 @@ object MapFrame {
      */
     val CLOSE_HALF_M: Float = SitPathPlot.MIN_HALF_SPAN_M * SitPathPlot.FIT_PAD
 
+    /** Drive HUD leaves more road ahead and keeps the vehicle below the map center. */
+    val DRIVE_LOOK_AHEAD_M: Float = CLOSE_HALF_M * 0.34f
+
     /** Tile window around you while the close view follows. Covers a turned wide band. */
     const val CLOSE_TILE_HALF_M = 560f
 

@@ -1155,6 +1155,33 @@ class SitPathPlotTest {
     }
 
     @Test
+    fun driveLookAheadKeepsTheVehicleBelowCenterWithRoadAheadVisible() {
+        val here = GpsSample(1L, 36.0, -115.0)
+        val model = SitPathPlot.Model(listOf(here), emptyList(), 0.0, 0.0, "drive")
+        val lay = SitPathPlot.layout(
+            model,
+            600f,
+            420f,
+            followHalfM = MapFrame.CLOSE_HALF_M,
+            followAheadM = MapFrame.DRIVE_LOOK_AHEAD_M,
+            courseDeg = 0.0,
+        )!!
+
+        val you = lay.project(here.lat, here.lon)
+        val cx = (lay.plotLeft + lay.plotRight) / 2f
+        val cy = (lay.plotTop + lay.plotBottom) / 2f
+        assertEquals(cx, you.x, 2f)
+        assertTrue(you.y > cy + 20f)
+        assertTrue(you.y < lay.plotBottom - 20f)
+        val ahead = lay.project(
+            here.lat + MapFrame.CLOSE_HALF_M / 110_540.0,
+            here.lon,
+        )
+        assertTrue(ahead.y < cy)
+        assertTrue(ahead.y > lay.plotTop)
+    }
+
+    @Test
     fun aHeldCloseViewKeepsDirectionOfTravelUp() {
         val here = GpsSample(1L, 36.0, -115.0)
         val model = SitPathPlot.Model(listOf(here), emptyList(), 0.0, 0.0, "held")
