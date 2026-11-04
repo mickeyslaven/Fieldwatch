@@ -664,7 +664,8 @@ object PathTiles {
     private const val MAX_TILE_BYTES = 2_000_000
 
     /** Saved pictures for every map and overlay. Android cache cleaning does not remove this folder. */
-    private const val TILE_ROOT = "map-tiles"
+    internal const val TILE_ROOT_NAME = "map-tiles"
+    private const val TILE_ROOT = TILE_ROOT_NAME
 
     /** Path accepted for an ADB-installed offline pack under the app's external files. */
     internal fun offlineTileFile(root: File, cacheName: String, z: Int, x: Int, y: Int): File =

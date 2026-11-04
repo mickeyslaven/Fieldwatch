@@ -277,6 +277,31 @@ class GnssMonitor(private val app: FieldwatchApp) {
 
     fun marks(): List<GnssMark> = _reading.value.marks
 
+    /**
+     * Reattach Android's raw/status callbacks without running or replacing calibration.
+     * This recovers the Shield receiver after a cold boot or wall-clock correction.
+     */
+    fun warmStartReceiver() {
+        if (calibrating) return
+        handler?.post {
+            if (!running || calibrating) return@post
+            handler?.removeCallbacks(noData)
+            handler?.removeCallbacks(stalled)
+            val keepFull = fullTracking
+            unregisterCallback()
+            releaseOwnLocation()
+            detector.reset()
+            alerts.reset()
+            lastSnap = null
+            engineStopped = false
+            gotMeas = false
+            registerCallback(keepFull)
+            syncOwnLocation()
+            handler?.postDelayed(noData, 30_000L)
+            publish(null, null)
+        }
+    }
+
     private fun startLocked(settings: AppSettings) {
         val lm = manager() ?: return
         if (!fine()) {

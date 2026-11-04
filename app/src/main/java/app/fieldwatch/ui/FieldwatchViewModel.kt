@@ -248,6 +248,7 @@ data class FieldwatchUi(
 class FieldwatchViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as FieldwatchApp
     val mapKeyRevision: StateFlow<Int> = app.mapKeys.revision
+    val pittsburghMapPack = app.pittsburghMaps.state
     val flockIndex: FlockIndex get() = app.flockIndex
     val flockRevision: StateFlow<Int> = app.flockRevision
     private val _flockLayer = MutableStateFlow(FlockLayerUi())

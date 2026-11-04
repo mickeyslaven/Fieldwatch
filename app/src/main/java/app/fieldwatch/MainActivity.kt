@@ -19,11 +19,14 @@ import app.fieldwatch.ui.FieldwatchViewModel
 import app.fieldwatch.ui.screen.CrashNoteScreen
 import app.fieldwatch.ui.theme.FieldwatchTheme
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private val vm: FieldwatchViewModel by viewModels()
     @Suppress("DEPRECATION")
     private var carKeyguardLock: KeyguardManager.KeyguardLock? = null
+    private var gpsWarmJob: Job? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -67,6 +70,13 @@ class MainActivity : ComponentActivity() {
         vm.refreshPermissions()
         if (RadioPermissions.granted(this) && !app.devices.stats.value.scanning) {
             vm.startScan()
+        }
+        if (RadioPermissions.granted(this)) {
+            gpsWarmJob?.cancel()
+            gpsWarmJob = lifecycleScope.launch {
+                delay(2_000L)
+                app.warmStartGps()
+            }
         }
     }
 

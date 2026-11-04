@@ -13,6 +13,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -68,6 +69,7 @@ class Alerter(private val context: Context) {
     val mappedSensorAlerts: SharedFlow<String> = _mappedSensorAlerts.asSharedFlow()
 
     init {
+        raiseAlertVolume()
         ensureChannel()
     }
 
@@ -131,8 +133,8 @@ class Alerter(private val context: Context) {
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .setAutoCancel(true)
                 .setSilent(true)
                 .setContentIntent(pending)
@@ -172,8 +174,8 @@ class Alerter(private val context: Context) {
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .setAutoCancel(true)
                 .setSilent(true)
                 .setContentIntent(pending)
@@ -215,7 +217,8 @@ class Alerter(private val context: Context) {
                 .setSmallIcon(R.drawable.ic_stat_layer)
                 .setContentTitle(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .setAutoCancel(true)
                 .setSilent(true)
                 .setContentIntent(pending)
@@ -327,8 +330,8 @@ class Alerter(private val context: Context) {
                     "$label appeared\n${device.kind}  ${MacUtil.screenMac(device.mac, demoMode)}\n${device.rssi} dBm  ${MacUtil.redactMacIn(device.displayName, device.mac, demoMode)}",
                 ),
             )
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true)
             .setSilent(true)
             .setContentIntent(pending)
@@ -342,6 +345,7 @@ class Alerter(private val context: Context) {
 
     private fun playSynthBeep(holdFocus: Boolean) {
         runCatching {
+            raiseAlertVolume()
             stopBeep()
             val sampleRate = 22_050
             val pipSamples = sampleRate * PIP_MS / 1000
@@ -441,7 +445,7 @@ class Alerter(private val context: Context) {
         val step = 2.0 * Math.PI * freqHz / sampleRate
         val attack = (sampleRate * 0.004).toInt().coerceAtLeast(1)
         val release = (sampleRate * 0.008).toInt().coerceAtLeast(1)
-        val peak = Short.MAX_VALUE * 0.62
+        val peak = Short.MAX_VALUE * 0.94
         for (i in 0 until n) {
             val env = when {
                 i < attack -> i.toFloat() / attack
@@ -582,17 +586,20 @@ class Alerter(private val context: Context) {
                     pendingSpeak = null
                     ttsSpeakTries = 0
                     main.removeCallbacks(speakWatchdog)
+                    releaseFocus()
                 }
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
                     speaking = false
                     utteranceStarted = false
                     main.removeCallbacks(speakWatchdog)
+                    releaseFocus()
                 }
                 override fun onError(utteranceId: String?, errorCode: Int) {
                     speaking = false
                     utteranceStarted = false
                     main.removeCallbacks(speakWatchdog)
+                    releaseFocus()
                 }
             })
             // Samsung often drops the first speak() if it runs inside onInit.
@@ -613,9 +620,16 @@ class Alerter(private val context: Context) {
         ttsSpeakTries++
         speaking = true
         utteranceStarted = false
-        val ok = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE)
+        raiseAlertVolume()
+        requestVoiceFocus()
+        val params = Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f)
+            putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+        }
+        val ok = engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, UTTERANCE)
         if (ok != TextToSpeech.SUCCESS) {
             speaking = false
+            releaseFocus()
             if (ttsSpeakTries < 2) {
                 main.postDelayed({ startSpeak(text) }, TTS_AFTER_INIT_MS)
             }
@@ -630,6 +644,7 @@ class Alerter(private val context: Context) {
                 speaking = false
                 pendingSpeak = null
                 ttsSpeakTries = 0
+                releaseFocus()
             }
         }, TTS_START_WAIT_MS)
     }
@@ -655,9 +670,10 @@ class Alerter(private val context: Context) {
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < 26) return
         runCatching { manager.deleteNotificationChannel("fieldwatch_watch_v2") }
+        runCatching { manager.deleteNotificationChannel("fieldwatch_watch_v3") }
         if (manager.getNotificationChannel(CHANNEL) == null) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL, "Watchlist", NotificationManager.IMPORTANCE_HIGH).apply {
+                NotificationChannel(CHANNEL, "Watchlist", NotificationManager.IMPORTANCE_LOW).apply {
                     description = LanguageText.text("ui.appearing.signatures.devices.watchlist")
                     enableVibration(true)
                     enableLights(true)
@@ -669,9 +685,10 @@ class Alerter(private val context: Context) {
 
     private fun ensureGnssChannel() {
         if (Build.VERSION.SDK_INT < 26) return
+        runCatching { manager.deleteNotificationChannel("fieldwatch_gnss") }
         if (manager.getNotificationChannel(GNSS_CHANNEL) != null) return
         manager.createNotificationChannel(
-            NotificationChannel(GNSS_CHANNEL, LanguageText.text("settings.topic.gnss"), NotificationManager.IMPORTANCE_HIGH).apply {
+            NotificationChannel(GNSS_CHANNEL, LanguageText.text("settings.topic.gnss"), NotificationManager.IMPORTANCE_LOW).apply {
                 description = LanguageText.text("ui.possible.gnss.interference.spoofing")
                 setSound(null, null)
             },
@@ -680,9 +697,10 @@ class Alerter(private val context: Context) {
 
     private fun ensureTrustedChannel() {
         if (Build.VERSION.SDK_INT < 26) return
+        runCatching { manager.deleteNotificationChannel("fieldwatch_trusted") }
         if (manager.getNotificationChannel(TRUSTED_CHANNEL) != null) return
         manager.createNotificationChannel(
-            NotificationChannel(TRUSTED_CHANNEL, LanguageText.text("settings.topic.trusted"), NotificationManager.IMPORTANCE_HIGH).apply {
+            NotificationChannel(TRUSTED_CHANNEL, LanguageText.text("settings.topic.trusted"), NotificationManager.IMPORTANCE_LOW).apply {
                 description = LanguageText.text("trusted.help")
                 setSound(null, null)
             },
@@ -691,12 +709,13 @@ class Alerter(private val context: Context) {
 
     private fun ensureFlockChannel() {
         if (Build.VERSION.SDK_INT < 26) return
+        runCatching { manager.deleteNotificationChannel("fieldwatch_map_layers") }
         if (manager.getNotificationChannel(FLOCK_CHANNEL) != null) return
         manager.createNotificationChannel(
             NotificationChannel(
                 FLOCK_CHANNEL,
                 LanguageText.text("settings.layer.channel"),
-                NotificationManager.IMPORTANCE_DEFAULT,
+                NotificationManager.IMPORTANCE_LOW,
             ).apply {
                 description = LanguageText.text("settings.layer.channel.body")
                 setSound(null, null)
@@ -722,11 +741,46 @@ class Alerter(private val context: Context) {
         }
     }
 
+    /** Dedicated car display: keep its media stream audible above road noise. */
+    private fun raiseAlertVolume() {
+        runCatching {
+            val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            if (max > 0 && audio.getStreamVolume(AudioManager.STREAM_MUSIC) < max) {
+                audio.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
+            }
+        }
+    }
+
+    /** Duck any other tablet audio while a spoken warning is active. */
+    private fun requestVoiceFocus() {
+        releaseFocus()
+        val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        if (Build.VERSION.SDK_INT >= 26) {
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(attrs)
+                .setAcceptsDelayedFocusGain(false)
+                .build()
+            if (audio.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                focusRequest = req
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            legacyFocusHeld = audio.requestAudioFocus(
+                null,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }
+    }
+
     companion object {
-        const val CHANNEL = "fieldwatch_watch_v3"
-        const val GNSS_CHANNEL = "fieldwatch_gnss"
-        const val FLOCK_CHANNEL = "fieldwatch_map_layers"
-        const val TRUSTED_CHANNEL = "fieldwatch_trusted"
+        const val CHANNEL = "fieldwatch_watch_v4"
+        const val GNSS_CHANNEL = "fieldwatch_gnss_v2"
+        const val FLOCK_CHANNEL = "fieldwatch_map_layers_v2"
+        const val TRUSTED_CHANNEL = "fieldwatch_trusted_v2"
         private const val GNSS_NOTE_ID = 71_001
         private const val TRUSTED_NOTE_ID = 71_002
         private const val FLOCK_NOTE_ID = 72_010

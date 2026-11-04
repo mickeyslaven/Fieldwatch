@@ -12,6 +12,7 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import app.fieldwatch.alert.Alerter
 import app.fieldwatch.crash.CrashNotes
@@ -29,6 +30,7 @@ import app.fieldwatch.data.GnssRawFiles
 import app.fieldwatch.data.LogStore
 import app.fieldwatch.data.MapKeyStore
 import app.fieldwatch.data.PlaceStore
+import app.fieldwatch.data.PittsburghOfflinePack
 import app.fieldwatch.data.SitStore
 import app.fieldwatch.data.TrustedNetworkStore
 import app.fieldwatch.domain.CoTravel
@@ -42,6 +44,7 @@ import app.fieldwatch.domain.anySensorAlert
 import app.fieldwatch.domain.sensorNotice
 import app.fieldwatch.domain.Geo
 import app.fieldwatch.domain.GpsSample
+import app.fieldwatch.domain.MapBasemap
 import app.fieldwatch.domain.Hunt
 import app.fieldwatch.domain.HuntHeat
 import app.fieldwatch.domain.HuntPlain
@@ -65,6 +68,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -82,6 +86,8 @@ class FieldwatchApp : Application() {
     lateinit var config: ConfigStore
         private set
     lateinit var mapKeys: MapKeyStore
+        private set
+    lateinit var pittsburghMaps: PittsburghOfflinePack
         private set
     lateinit var devices: DeviceStore
         private set
@@ -557,6 +563,8 @@ class FieldwatchApp : Application() {
     @Volatile
     private var locating = false
     @Volatile
+    private var lastGpsWarmStartAt = 0L
+    @Volatile
     var pendingCrash: CrashNotes.Pending? = null
     private var started = false
     private val gpsListener = compatLocationListener { loc -> onProviderFix(loc, gps = true) }
@@ -583,6 +591,7 @@ class FieldwatchApp : Application() {
         if (started) return
         started = true
         config = ConfigStore(this)
+        pittsburghMaps = PittsburghOfflinePack(this)
         RadioDb.init(this)
         devices = DeviceStore()
         logs = LogStore(this)
@@ -600,6 +609,13 @@ class FieldwatchApp : Application() {
         )
         runBlocking {
             config.load()
+            val mapChoice = File(filesDir, "pittsburgh-offline-map-choice-v1")
+            if (!mapChoice.isFile) {
+                config.update { current ->
+                    current.copy(settings = current.settings.copy(mapBasemap = MapBasemap.USGS_TOPO))
+                }
+                runCatching { mapChoice.writeText("USGS_TOPO\n") }
+            }
             val languageSnap = language.load(Locale.getDefault())
             LanguageText.apply(languageSnap.overlay, languageSnap.activeTag)
             if (gnssProfile.profile.value == null && config.settings.gnssMonitor) {
@@ -620,6 +636,10 @@ class FieldwatchApp : Application() {
         sits.startFlusher()
         places.startFlusher(scope)
         trusted.startFlusher()
+        scope.launch(Dispatchers.IO) {
+            delay(4_000L)
+            pittsburghMaps.installUntilReady()
+        }
         syncLocationUpdates()
         syncFlock()
         if (config.settings.alertVoice || config.settings.gnssVoice || config.settings.trustedVoice || config.settings.anySensorAlert()) {
@@ -797,6 +817,20 @@ class FieldwatchApp : Application() {
         syncLocationUpdates()
     }
 
+    /**
+     * The Shield's Android 7 GNSS stack occasionally stays asleep after cold boot or a clock
+     * correction. Reattaching the real location request gives the same receiver kick as the
+     * calibration screen without replacing the saved interference baseline.
+     */
+    fun warmStartGps(force: Boolean = false) {
+        if (!locationTagWanted()) return
+        val now = SystemClock.elapsedRealtime()
+        if (!force && lastGpsWarmStartAt != 0L && now - lastGpsWarmStartAt < 30_000L) return
+        lastGpsWarmStartAt = now
+        resubscribeLocationUpdates()
+        if (::gnss.isInitialized) gnss.warmStartReceiver()
+    }
+
     fun startLocationUpdates() {
         if (locating || !hasFineLocation()) return
         val lm = getSystemService(LOCATION_SERVICE) as LocationManager
@@ -858,7 +892,7 @@ class FieldwatchApp : Application() {
         val now = System.currentTimeMillis()
         val cands = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
             .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
-            .filter { now - it.time < 30_000L && (!it.hasAccuracy() || it.accuracy <= 75f) }
+            .filter { phoneFixIsCurrent(it.time, now) && (!it.hasAccuracy() || it.accuracy <= 75f) }
         val best = cands.minByOrNull { if (it.hasAccuracy()) it.accuracy else 75f } ?: return
         acceptFix(best, gps = best.provider == LocationManager.GPS_PROVIDER)
     }

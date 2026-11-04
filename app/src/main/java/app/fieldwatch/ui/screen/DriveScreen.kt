@@ -78,6 +78,7 @@ import app.fieldwatch.domain.MapFrame
 import app.fieldwatch.domain.Palette
 import app.fieldwatch.domain.Sighting
 import app.fieldwatch.domain.SitPathPlot
+import app.fieldwatch.data.OfflinePackPhase
 import app.fieldwatch.ui.FieldwatchUi
 import app.fieldwatch.ui.FieldwatchViewModel
 import app.fieldwatch.ui.RadioClassBadge
@@ -230,13 +231,14 @@ private fun DriveMapPanel(
     val zoomIn by vm.driveZoomIn.collectAsStateWithLifecycle()
     val flockRevision by vm.flockRevision.collectAsStateWithLifecycle()
     val mapKeyRevision by vm.mapKeyRevision.collectAsStateWithLifecycle()
+    val pittsburghPack by vm.pittsburghMapPack.collectAsStateWithLifecycle()
     var tileWindow by remember { mutableStateOf<DoubleArray?>(null) }
     var northUp by remember { mutableStateOf(false) }
     val tileWindowKey = tileWindow?.let { SitPathPlot.tileWindowKey(it) }.orEmpty()
     val basemap = state.settings.mapBasemap
     val overlays = state.settings.mapOverlays
     val online = state.settings.onlineLookup
-    LaunchedEffect(tileWindowKey, online, basemap, overlays, mapKeyRevision) {
+    LaunchedEffect(tileWindowKey, online, basemap, overlays, mapKeyRevision, pittsburghPack.ready) {
         val window = tileWindow ?: return@LaunchedEffect
         vm.refreshDriveArea(
             window[0], window[1], window[2], window[3],
@@ -366,7 +368,13 @@ private fun DriveMapPanel(
                         DriveStatPill(Icons.Outlined.Sensors, "$totalActive on air")
                         DriveStatPill(
                             Icons.Outlined.GpsFixed,
-                            if (online) "LIVE MAP" else "OFFLINE MAP",
+                            when (pittsburghPack.phase) {
+                                OfflinePackPhase.READY -> "PIT OFFLINE"
+                                OfflinePackPhase.DOWNLOADING,
+                                OfflinePackPhase.INSTALLING -> "PIT MAP ${pittsburghPack.percent}%"
+                                OfflinePackPhase.PAUSED -> "PIT MAP PAUSED"
+                                OfflinePackPhase.WAITING -> if (online) "LIVE MAP" else "OFFLINE MAP"
+                            },
                         )
                     }
                 }

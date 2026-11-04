@@ -182,6 +182,14 @@ class ScanService : LifecycleService() {
     private val locationWatch = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val app = application as? FieldwatchApp ?: return
+            if (
+                intent?.action == Intent.ACTION_TIME_CHANGED ||
+                intent?.action == Intent.ACTION_TIMEZONE_CHANGED ||
+                intent?.action == Intent.ACTION_DATE_CHANGED
+            ) {
+                app.warmStartGps(force = true)
+                return
+            }
             noteLocation(runCatching { app.systemLocationOn() }.getOrDefault(false))
         }
     }
@@ -191,6 +199,9 @@ class ScanService : LifecycleService() {
         val filter = IntentFilter().apply {
             addAction(LocationManager.MODE_CHANGED_ACTION)
             addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            addAction(Intent.ACTION_DATE_CHANGED)
         }
         runCatching {
             ContextCompat.registerReceiver(
