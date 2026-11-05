@@ -372,7 +372,11 @@ private fun DriveMapPanel(
                                 OfflinePackPhase.READY -> "PIT OFFLINE"
                                 OfflinePackPhase.DOWNLOADING,
                                 OfflinePackPhase.INSTALLING -> "PIT MAP ${pittsburghPack.percent}%"
-                                OfflinePackPhase.PAUSED -> "PIT MAP PAUSED"
+                                OfflinePackPhase.PAUSED -> if (pittsburghPack.detail.isBlank()) {
+                                    "PIT MAP PAUSED"
+                                } else {
+                                    "PIT ${pittsburghPack.detail}"
+                                }
                                 OfflinePackPhase.WAITING -> if (online) "LIVE MAP" else "OFFLINE MAP"
                             },
                         )

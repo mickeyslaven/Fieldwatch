@@ -5,11 +5,17 @@ import app.fieldwatch.BuildConfig
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.net.URL
 import java.security.MessageDigest
+import javax.net.ssl.SSLException
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -26,6 +32,7 @@ data class OfflinePackState(
     val phase: OfflinePackPhase = OfflinePackPhase.WAITING,
     val percent: Int = 0,
     val ready: Boolean = false,
+    val detail: String = "",
 )
 
 /** A resumable, one-time Pittsburgh USGS Topo pack for the dedicated Shield car display. */
@@ -45,8 +52,12 @@ class PittsburghOfflinePack(private val context: Context) {
                 return
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                _state.value = OfflinePackState(OfflinePackPhase.PAUSED, _state.value.percent)
+            } catch (error: Exception) {
+                _state.value = OfflinePackState(
+                    OfflinePackPhase.PAUSED,
+                    _state.value.percent,
+                    detail = failureLabel(error),
+                )
                 delay(RETRY_MS)
             }
         }
@@ -56,10 +67,8 @@ class PittsburghOfflinePack(private val context: Context) {
         if (installed()) OfflinePackState(OfflinePackPhase.READY, 100, ready = true)
         else OfflinePackState()
 
-    private fun externalRoot(): File =
-        context.getExternalFilesDir(null) ?: error("External app storage is unavailable")
-
-    private fun mapRoot(): File = File(externalRoot(), PathTiles.TILE_ROOT_NAME)
+    /** Internal app storage is always mounted; the original external-storage installer failed on the Shield. */
+    private fun mapRoot(): File = File(context.filesDir, PathTiles.TILE_ROOT_NAME)
 
     private fun marker(): File = File(mapRoot(), COMPLETE_MARKER)
 
@@ -67,17 +76,51 @@ class PittsburghOfflinePack(private val context: Context) {
         runCatching { marker().readText().trim() == EXPECTED_SHA256 }.getOrDefault(false)
 
     private suspend fun installOnce() {
-        val root = mapRoot().apply { mkdirs() }
+        val root = mapRoot()
+        if (!root.isDirectory && !root.mkdirs()) error("Map storage is unavailable")
+        if (bundledPackAvailable()) {
+            installBundled(root)
+            marker().writeText(EXPECTED_SHA256)
+            return
+        }
         val archive = File(root, PARTIAL_ARCHIVE)
         download(archive)
         if (sha256(archive) != EXPECTED_SHA256) {
             archive.delete()
             error("Offline map checksum mismatch")
         }
-        extract(archive, root)
+        FileInputStream(archive).use { extract(it, root, DOWNLOAD_SHARE) }
         marker().writeText(EXPECTED_SHA256)
         archive.delete()
     }
+
+    /**
+     * The Shield's Android 7 HTTPS stack could not reliably fetch the GitHub release asset.
+     * Shipping the already-verified pack in the APK makes installation independent of Wi-Fi,
+     * redirects, TLS roots, and the external-storage mount.
+     */
+    private suspend fun installBundled(root: File) {
+        val actual = context.assets.open(BUNDLED_ASSET).use { input ->
+            sha256(input) { read ->
+                val percent = ((read * BUNDLED_VERIFY_SHARE) / EXPECTED_BYTES)
+                    .toInt()
+                    .coerceIn(1, BUNDLED_VERIFY_SHARE)
+                _state.value = OfflinePackState(OfflinePackPhase.INSTALLING, percent)
+            }
+        }
+        if (actual != EXPECTED_SHA256) error("Bundled map checksum mismatch")
+        context.assets.open(BUNDLED_ASSET).use { input ->
+            extract(input, root, BUNDLED_VERIFY_SHARE)
+        }
+    }
+
+    private fun bundledPackAvailable(): Boolean =
+        try {
+            context.assets.open(BUNDLED_ASSET).use { }
+            true
+        } catch (_: FileNotFoundException) {
+            false
+        }
 
     private suspend fun download(target: File) {
         currentCoroutineContext().ensureActive()
@@ -133,9 +176,9 @@ class PittsburghOfflinePack(private val context: Context) {
         }
     }
 
-    private suspend fun extract(archive: File, root: File) {
+    private suspend fun extract(input: InputStream, root: File, startPercent: Int) {
         var entries = 0
-        ZipInputStream(BufferedInputStream(FileInputStream(archive))).use { zip ->
+        ZipInputStream(BufferedInputStream(input)).use { zip ->
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val entry = zip.nextEntry ?: break
@@ -159,22 +202,25 @@ class PittsburghOfflinePack(private val context: Context) {
                 }
                 zip.closeEntry()
                 entries++
-                val percent = DOWNLOAD_SHARE +
-                    ((entries.coerceAtMost(EXPECTED_ENTRIES) * (100 - DOWNLOAD_SHARE)) / EXPECTED_ENTRIES)
+                val percent = startPercent +
+                    ((entries.coerceAtMost(EXPECTED_ENTRIES) * (100 - startPercent)) / EXPECTED_ENTRIES)
                 _state.value = OfflinePackState(OfflinePackPhase.INSTALLING, percent.coerceIn(0, 99))
             }
         }
     }
 
-    private fun sha256(file: File): String {
+    private fun sha256(file: File): String = FileInputStream(file).use { sha256(it) }
+
+    private fun sha256(input: InputStream, onBytes: ((Long) -> Unit)? = null): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        FileInputStream(file).use { input ->
-            val buffer = ByteArray(128 * 1024)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
+        val buffer = ByteArray(128 * 1024)
+        var read = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+            read += count
+            onBytes?.invoke(read)
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
@@ -184,12 +230,34 @@ class PittsburghOfflinePack(private val context: Context) {
         private const val EXPECTED_BYTES = 59_928_323L
         private const val EXPECTED_ENTRIES = 2_718
         private const val DOWNLOAD_SHARE = 82
+        private const val BUNDLED_VERIFY_SHARE = 18
         private const val RETRY_MS = 30_000L
         private const val COMPLETE_MARKER = ".pittsburgh-usgs-10km-v1.complete"
         private const val PARTIAL_ARCHIVE = ".pittsburgh-usgs-10km-v1.zip.part"
+        private const val BUNDLED_ASSET = "pittsburgh-usgs-10km-v1.zip"
         private const val DOWNLOAD_URL =
             "https://github.com/mickeyslaven/Fieldwatch/releases/download/" +
                 "v1.1.42-shield7.1-pittsburgh/Pittsburgh-USGS-10km-v1.zip"
+
+        internal fun failureLabel(error: Throwable): String {
+            val causes = generateSequence(error) { it.cause }.toList()
+            return when {
+                causes.any { it is UnknownHostException } -> "NO INTERNET"
+                causes.any { it is SocketTimeoutException } -> "TIMEOUT"
+                causes.any { it is SSLException } -> "TLS ERROR"
+                causes.any { it is SecurityException } -> "STORAGE"
+                causes.any {
+                    it is IOException && (
+                        it.message?.contains("space", ignoreCase = true) == true ||
+                            it.message?.contains("storage", ignoreCase = true) == true
+                        )
+                } -> "STORAGE FULL"
+                error.message?.contains("checksum", ignoreCase = true) == true -> "CHECKSUM"
+                error.message?.contains("HTTP ", ignoreCase = true) == true ->
+                    "HTTP " + error.message.orEmpty().substringAfter("HTTP ").takeWhile { it.isDigit() }
+                else -> "INSTALL ERROR"
+            }
+        }
 
         internal fun safePackEntry(root: File, name: String): File? {
             if (name.isBlank() || name.startsWith('/') || '\\' in name) return null
