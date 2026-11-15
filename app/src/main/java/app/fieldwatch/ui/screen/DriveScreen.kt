@@ -74,6 +74,7 @@ import app.fieldwatch.domain.DriveDeck
 import app.fieldwatch.domain.DriveMapMotion
 import app.fieldwatch.domain.GpsSample
 import app.fieldwatch.domain.MacUtil
+import app.fieldwatch.domain.MapBasemap
 import app.fieldwatch.domain.MapFrame
 import app.fieldwatch.domain.Palette
 import app.fieldwatch.domain.Sighting
@@ -235,7 +236,9 @@ private fun DriveMapPanel(
     var tileWindow by remember { mutableStateOf<DoubleArray?>(null) }
     var northUp by remember { mutableStateOf(false) }
     val tileWindowKey = tileWindow?.let { SitPathPlot.tileWindowKey(it) }.orEmpty()
-    val basemap = state.settings.mapBasemap
+    // Drive ships a verified Pittsburgh USGS pack. Do not let the global map preference
+    // select a stale online OSM tile (including OSM's cached 403 policy image) here.
+    val basemap = MapBasemap.USGS_TOPO
     val overlays = state.settings.mapOverlays
     val online = state.settings.onlineLookup
     LaunchedEffect(tileWindowKey, online, basemap, overlays, mapKeyRevision, pittsburghPack.ready) {
