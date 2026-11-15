@@ -40,6 +40,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Runs only Termux's exported background command service. No Termux
+        // activity is opened, so this cannot cover the car dashboard.
+        TermuxSsh.ensureRunning(this)
         // Android 7 on the Shield can leave a swipe-only keyguard above an activity
         // launched by BOOT_COMPLETED even with the window flags below. This is a
         // dedicated car display, so use the legacy API that this OS actually honors.

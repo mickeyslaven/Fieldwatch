@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.ScanResult
+import android.net.wifi.SupplicantState
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -75,6 +76,13 @@ class WifiRadio(
         }
         registered = true
         emitResults(fresh = false)
+        // The Shield Tablet K1's Android 7 Wi-Fi driver can wedge its data path if an
+        // active scan starts while the saved network is still associating at boot.
+        // BLE remains live during this short grace period, and the service loop will
+        // request a Wi-Fi scan as soon as the grace expires.
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1) {
+            nextAllowedAt.set(System.currentTimeMillis() + LEGACY_START_GRACE_MS)
+        }
         requestScan(minIntervalMs = 0L)
     }
 
@@ -92,6 +100,22 @@ class WifiRadio(
     @SuppressLint("MissingPermission")
     fun requestScan(minIntervalMs: Long = 30_000L, unthrottled: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
+        // On the Shield K1, startScan() while associated can leave the connection
+        // receive-only until Wi-Fi is reconnected. Keep reading cached results while
+        // connected, then resume active wardriving scans within a few seconds after
+        // the tablet leaves that network.
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1 && connectedToNetwork()) {
+            failStreak.set(0)
+            awaitingScan.set(false)
+            val gate = nextAllowedAt.get()
+            if (now >= gate) {
+                emitResults(fresh = false)
+                nextAllowedAt.set(now + CONNECTED_RECHECK_MS)
+            } else if (gate > now + CONNECTED_RECHECK_MS) {
+                nextAllowedAt.set(now + CONNECTED_RECHECK_MS)
+            }
+            return false
+        }
         val quotaWait = if (unthrottled) 0L else synchronized(quotaLock) { pruneAndQuotaWait(now) }
         val gate = maxOf(nextAllowedAt.get(), quotaWait)
         if (now < gate) {
@@ -121,6 +145,12 @@ class WifiRadio(
     fun radioOn(): Boolean = runCatching { wifi.isWifiEnabled }.getOrDefault(false)
 
     fun waitingOnOs(): Boolean = failStreak.get() > 0
+
+    @SuppressLint("MissingPermission")
+    private fun connectedToNetwork(): Boolean = runCatching {
+        val info = wifi.connectionInfo
+        info != null && info.networkId >= 0 && info.supplicantState == SupplicantState.COMPLETED
+    }.getOrDefault(false)
 
     fun throttleHint(): String {
         val now = System.currentTimeMillis()
@@ -242,6 +272,8 @@ class WifiRadio(
         private const val TAG = "FieldwatchWifi"
         private const val QUOTA_SCANS = 4
         private const val QUOTA_WINDOW_MS = 120_000L
+        private const val CONNECTED_RECHECK_MS = 5_000L
+        private const val LEGACY_START_GRACE_MS = 15_000L
         const val FAST_INTERVAL_MS = 8_000L
 
         /** Android 11+: true if the OS is still rate-limiting startScan(). Below 11 we cannot read it. */

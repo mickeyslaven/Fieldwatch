@@ -210,6 +210,11 @@ class BleRadio(
 
     private fun settingsFor(intensity: ScanIntensity): ScanSettings {
         val mode = when {
+            // The Shield Tablet K1's Android 7 Bluetooth/Wi-Fi coexistence
+            // collapses under continuous or balanced BLE scanning. LOW_POWER
+            // still samples frequently advertised Remote ID packets while
+            // keeping the associated Wi-Fi network and headless SSH responsive.
+            Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1 -> ScanSettings.SCAN_MODE_LOW_POWER
             demoted && intensity == ScanIntensity.PERFORMANCE -> ScanSettings.SCAN_MODE_BALANCED
             else -> scanMode(intensity)
         }
