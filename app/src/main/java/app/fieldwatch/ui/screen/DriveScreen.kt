@@ -245,9 +245,17 @@ private fun DriveMapPanel(
             online, basemap, overlays,
         )
     }
-    val rawModel = remember(state.drivePath) {
+    val waitingForGps = state.drivePath.isEmpty()
+    // The offline pack must be drawable before the first receiver fix. This point is only a
+    // map center; it never enters FieldwatchApp, the recorded path, or proximity alerts.
+    val displayPath = remember(state.drivePath) {
+        state.drivePath.ifEmpty {
+            listOf(GpsSample(0L, PITTSBURGH_MAP_LAT, PITTSBURGH_MAP_LON))
+        }
+    }
+    val rawModel = remember(displayPath) {
         SitPathPlot.Model(
-            samples = state.drivePath,
+            samples = displayPath,
             dots = emptyList(),
             lengthM = 0.0,
             spanM = 0.0,
@@ -255,7 +263,7 @@ private fun DriveMapPanel(
             live = true,
         )
     }
-    val smoothPath = rememberSmoothDrivePath(state.drivePath)
+    val smoothPath = rememberSmoothDrivePath(displayPath)
     val model = remember(rawModel, smoothPath) { rawModel.copy(samples = smoothPath) }
     val targetAccent = when (mode) {
         DriveHeroMode.CLEAR -> Color(0xFF42F5A7)
@@ -293,52 +301,32 @@ private fun DriveMapPanel(
         tonalElevation = 4.dp,
     ) {
         Box(Modifier.fillMaxSize()) {
-            if (model.samples.isEmpty()) {
-                Column(
-                    Modifier.align(Alignment.Center).padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Icon(
-                        Icons.Outlined.GpsFixed,
-                        contentDescription = null,
-                        tint = Color(0xFFFFB020),
-                        modifier = Modifier.size(54.dp),
-                    )
-                    Text(
-                        "WAITING FOR GPS",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            } else {
-                SitPathCanvas(
-                    model = model,
-                    modifier = Modifier.fillMaxSize(),
-                    tiles = tiles,
-                    expand = true,
-                    position = rememberMapFooter(
+            SitPathCanvas(
+                model = model,
+                modifier = Modifier.fillMaxSize(),
+                tiles = tiles,
+                expand = true,
+                position = if (waitingForGps) null else rememberMapFooter(
                         state.settings.mapFooter,
                         state.phoneLat,
                         state.phoneLon,
                         state.settings.demoMode,
                     ),
-                    courseDeg = state.travelDeg,
-                    mapFrame = if (northUp) MapFrame.CLOSE_NORTH else MapFrame.CLOSE,
-                    onRotate = { northUp = !northUp },
-                    fitButton = false,
-                    zoomIn = zoomIn,
-                    followAheadM = MapFrame.DRIVE_LOOK_AHEAD_M,
-                    tileModel = rawModel,
-                    flock = state.settings.flockLayer || state.settings.sensorLayer,
-                    flockIndex = vm.flockIndex,
-                    flockRevision = flockRevision,
-                    onTileWindow = { next ->
-                        if (SitPathPlot.tileWindowKey(next) != tileWindowKey) tileWindow = next
-                    },
-                )
-            }
+                showPositionDot = !waitingForGps,
+                courseDeg = if (waitingForGps) Double.NaN else state.travelDeg,
+                mapFrame = if (northUp) MapFrame.CLOSE_NORTH else MapFrame.CLOSE,
+                onRotate = { northUp = !northUp },
+                fitButton = false,
+                zoomIn = zoomIn,
+                followAheadM = if (waitingForGps) 0f else MapFrame.DRIVE_LOOK_AHEAD_M,
+                tileModel = rawModel,
+                flock = state.settings.flockLayer || state.settings.sensorLayer,
+                flockIndex = vm.flockIndex,
+                flockRevision = flockRevision,
+                onTileWindow = { next ->
+                    if (SitPathPlot.tileWindowKey(next) != tileWindowKey) tileWindow = next
+                },
+            )
 
             Surface(
                 modifier = Modifier
@@ -407,6 +395,9 @@ private fun DriveMapPanel(
         }
     }
 }
+
+private const val PITTSBURGH_MAP_LAT = 40.4406
+private const val PITTSBURGH_MAP_LON = -79.9959
 
 /**
  * Ease only the drawn tip of the route. Alert range, direction, and speech keep using the

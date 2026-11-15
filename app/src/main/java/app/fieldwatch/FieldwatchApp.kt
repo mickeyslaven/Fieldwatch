@@ -68,7 +68,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -637,7 +636,6 @@ class FieldwatchApp : Application() {
         places.startFlusher(scope)
         trusted.startFlusher()
         scope.launch(Dispatchers.IO) {
-            delay(4_000L)
             pittsburghMaps.installUntilReady()
         }
         syncLocationUpdates()

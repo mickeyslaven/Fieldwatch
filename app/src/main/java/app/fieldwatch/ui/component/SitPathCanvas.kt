@@ -123,6 +123,8 @@ fun SitPathCanvas(
     onViewport: ((SitPathPlot.Viewport?) -> Unit)? = null,
     /** Where this phone is now. Blank stays off. The path figure does not pass this. */
     position: String? = null,
+    /** False lets a display-only seed center the map without pretending the phone is there. */
+    showPositionDot: Boolean = true,
     /** Degrees clockwise from north. NaN keeps this frame north-up. */
     courseDeg: Double = Double.NaN,
     /** [MapFrame]. Reports leave this at north-up and leave the button off. */
@@ -533,7 +535,7 @@ fun SitPathCanvas(
                         drawClassDisc(pt, 12f, fill, painter)
                     }
                 }
-                if (lay.path.isNotEmpty()) {
+                if (showPositionDot && lay.path.isNotEmpty()) {
                     val end = lay.path.last()
                     if (lay.nearPicture(end.x, end.y)) drawYouDot(end.x, end.y, 6.2f, you)
                 }

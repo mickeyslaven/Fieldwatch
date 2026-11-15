@@ -1346,6 +1346,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             south, north, west, east, online, basemap, overlays, held = false,
             prefetch = false,
             cachedWhenOffline = true,
+            requestSalt = if (app.pittsburghMaps.state.value.ready) "pit-ready" else "pit-pending",
         )
     }
 
@@ -1489,6 +1490,8 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         held: Boolean,
         prefetch: Boolean = true,
         cachedWhenOffline: Boolean = false,
+        /** Changes when newly installed cached content must be read for the same window. */
+        requestSalt: String = "",
     ) {
         if (!online && !cachedWhenOffline) {
             cancelFlight(flight, live, prefetch)
@@ -1506,7 +1509,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
         }
         val coverage = PathTiles.coverageKey(south, north, west, east, basemap)
         val source = if (online) "net" else "cache"
-        val key = tileRequestKey(basemap, overlays, "$source:v:$coverage")
+        val key = tileRequestKey(basemap, overlays, "$source:$requestSalt:v:$coverage")
         if (coverage == "zoom") {
             cancelFlight(flight, live, prefetch)
             flight.key = key
