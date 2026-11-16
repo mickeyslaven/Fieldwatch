@@ -18,6 +18,22 @@ class PhoneFixTest {
     }
 
     @Test
+    fun elapsedFreshnessSurvivesWallClockCorrections() {
+        assertFalse(elapsedFixIsCurrent(0L, 10_000L))
+        assertTrue(elapsedFixIsCurrent(10_000L, 10_000L))
+        assertTrue(elapsedFixIsCurrent(10_000L, 40_000L))
+        assertFalse(elapsedFixIsCurrent(10_000L, 40_001L))
+    }
+
+    @Test
+    fun aBatterylessClockBehindItsCheckpointNeedsNetwork() {
+        val good = 1_800_000_000_000L
+        assertFalse(clockNeedsNetwork(good, good - 60_000L))
+        assertTrue(clockNeedsNetwork(1_400_000_000_000L, good))
+        assertTrue(clockNeedsNetwork(good - 24 * 60 * 60 * 1_000L, good))
+    }
+
+    @Test
     fun aFreshHuntKeepsTheAccuracyTheFixReported() {
         val now = 20_000L
         val fix = 36.2 to -115.1

@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.location.LocationManager
+import android.net.ConnectivityManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -187,7 +188,11 @@ class ScanService : LifecycleService() {
                 intent?.action == Intent.ACTION_TIMEZONE_CHANGED ||
                 intent?.action == Intent.ACTION_DATE_CHANGED
             ) {
-                app.warmStartGps(force = true)
+                app.noteSystemTimeChanged()
+                return
+            }
+            if (intent?.action == ConnectivityManager.CONNECTIVITY_ACTION) {
+                app.requestGpsNetworkAssistance(forceWarm = true)
                 return
             }
             noteLocation(runCatching { app.systemLocationOn() }.getOrDefault(false))
@@ -202,6 +207,7 @@ class ScanService : LifecycleService() {
             addAction(Intent.ACTION_TIME_CHANGED)
             addAction(Intent.ACTION_TIMEZONE_CHANGED)
             addAction(Intent.ACTION_DATE_CHANGED)
+            addAction(ConnectivityManager.CONNECTIVITY_ACTION)
         }
         runCatching {
             ContextCompat.registerReceiver(

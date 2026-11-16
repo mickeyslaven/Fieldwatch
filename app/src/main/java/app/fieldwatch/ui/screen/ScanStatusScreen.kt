@@ -161,7 +161,8 @@ internal fun scanPhoneFacts(context: Context, state: FieldwatchUi, now: Long): S
         fingerprint = Build.FINGERPRINT.orEmpty(),
         locationOn = app.systemLocationOn(),
         locationPermission = app.hasFineLocation(),
-        gpsFixAgeMs = app.gpsFixAgeMs(now),
+        // Location freshness is monotonic so an NTP correction cannot make a fresh fix stale.
+        gpsFixAgeMs = app.gpsFixAgeMs(),
         arrivalsOnly = filter.arrivalsOnly,
         watchedOnly = filter.watchedOnly,
         customNamesOnly = filter.customNamesOnly,

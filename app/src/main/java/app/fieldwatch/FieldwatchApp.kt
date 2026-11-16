@@ -10,6 +10,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationManager
+import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
@@ -142,11 +143,15 @@ class FieldwatchApp : Application() {
     var lastFix: Pair<Double, Double>? = null
     @Volatile
     var lastFixAt: Long = 0L
+    @Volatile
+    private var lastFixElapsedAt: Long = 0L
     /** GPS fix good enough for the Hunt cloud. Network fixes stay out. */
     @Volatile
     private var lastGpsFix: Pair<Double, Double>? = null
     @Volatile
     private var lastGpsFixAt: Long = 0L
+    @Volatile
+    private var lastGpsFixElapsedAt: Long = 0L
     /** Meters. NaN when that fix did not say how wide it was. */
     @Volatile
     private var lastGpsAcc = Float.NaN
@@ -171,15 +176,25 @@ class FieldwatchApp : Application() {
     private val travelCourse = Geo.TravelCourse()
 
     /**
-     * Latest phone fix still young enough to call current. Older than 30 s is left off.
-     * A timestamp a few seconds ahead of [now] still counts. The map reads this between
-     * clock ticks, and a newer Location.time was blanking the corner on every pass.
+     * Latest phone fix still young enough to call current. Monotonic receipt time keeps
+     * an NTP correction from blanking the map on this batteryless tablet.
      */
-    fun currentFix(now: Long = System.currentTimeMillis()): Pair<Double, Double>? {
+    fun currentFix(nowElapsed: Long = SystemClock.elapsedRealtime()): Pair<Double, Double>? {
         val fix = lastFix ?: return null
-        if (!phoneFixIsCurrent(lastFixAt, now)) return null
+        if (!elapsedFixIsCurrent(lastFixElapsedAt, nowElapsed)) return null
         return fix
     }
+
+    /** A live satellite fix, deliberately separate from a remembered map center. */
+    fun gpsFixLive(nowElapsed: Long = SystemClock.elapsedRealtime()): Boolean =
+        lastGpsFix != null && elapsedFixIsCurrent(lastGpsFixElapsedAt, nowElapsed)
+
+    /** Last real satellite position, retained only to center the offline map after a hard power cut. */
+    fun driveMapSeed(): Pair<Double, Double>? = savedGpsSeed
+
+    /** The Shield has no battery-backed clock now; a hard reset commonly returns it to 2012. */
+    fun gpsClockNeedsNetwork(now: Long = System.currentTimeMillis()): Boolean =
+        clockNeedsNetwork(now, gpsPrefs().getLong(GPS_CLOCK_CHECKPOINT, 0L))
 
     /** Where the hunt dot is. A local meter picture until the walk is on a fix. Not a place to publish. */
     fun huntFix(now: Long = System.currentTimeMillis()): Pair<Double, Double>? {
@@ -564,6 +579,12 @@ class FieldwatchApp : Application() {
     @Volatile
     private var lastGpsWarmStartAt = 0L
     @Volatile
+    private var lastGpsAssistAt = 0L
+    @Volatile
+    private var savedGpsSeed: Pair<Double, Double>? = null
+    @Volatile
+    private var lastGpsSeedWriteAt = 0L
+    @Volatile
     var pendingCrash: CrashNotes.Pending? = null
     private var started = false
     private val gpsListener = compatLocationListener { loc -> onProviderFix(loc, gps = true) }
@@ -632,6 +653,7 @@ class FieldwatchApp : Application() {
             pairingFlood.setSitOpen(sitOpen)
             wifiFlood.setSitOpen(sitOpen)
         }
+        loadGpsStartupState()
         sits.startFlusher()
         places.startFlusher(scope)
         trusted.startFlusher()
@@ -789,9 +811,9 @@ class FieldwatchApp : Application() {
 
     fun locationUpdatesActive(): Boolean = locating
 
-    fun gpsFixAgeMs(now: Long): Long? {
-        val at = lastFixAt
-        return if (at <= 0L) null else (now - at).coerceAtLeast(0L)
+    fun gpsFixAgeMs(nowElapsed: Long = SystemClock.elapsedRealtime()): Long? {
+        val at = lastGpsFixElapsedAt
+        return if (at <= 0L) null else (nowElapsed - at).coerceAtLeast(0L)
     }
 
     fun hasFineLocation(): Boolean =
@@ -827,6 +849,30 @@ class FieldwatchApp : Application() {
         lastGpsWarmStartAt = now
         resubscribeLocationUpdates()
         if (::gnss.isInitialized) gnss.warmStartReceiver()
+    }
+
+    /**
+     * Android 7's GNSS provider does not reliably retry its NTP/XTRA fetch when Wi-Fi appears
+     * after boot. Ask it explicitly, then reattach the receiver. The commands are harmless when
+     * the vendor provider declines them and require only ACCESS_LOCATION_EXTRA_COMMANDS.
+     */
+    @Suppress("DEPRECATION")
+    fun requestGpsNetworkAssistance(forceWarm: Boolean = true) {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        if (runCatching { cm.activeNetworkInfo?.isConnected == true }.getOrDefault(false).not()) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastGpsAssistAt != 0L && now - lastGpsAssistAt < GPS_ASSIST_THROTTLE_MS) return
+        lastGpsAssistAt = now
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        runCatching { lm.sendExtraCommand(LocationManager.GPS_PROVIDER, "force_time_injection", null) }
+        runCatching { lm.sendExtraCommand(LocationManager.GPS_PROVIDER, "force_xtra_injection", null) }
+        rememberClockCheckpoint()
+        if (forceWarm) warmStartGps(force = true)
+    }
+
+    fun noteSystemTimeChanged() {
+        rememberClockCheckpoint()
+        warmStartGps(force = true)
     }
 
     fun startLocationUpdates() {
@@ -887,20 +933,23 @@ class FieldwatchApp : Application() {
     }
 
     private fun seedLastKnown(lm: LocationManager) {
-        val now = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val nowWall = System.currentTimeMillis()
         val cands = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
             .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
-            .filter { phoneFixIsCurrent(it.time, now) && (!it.hasAccuracy() || it.accuracy <= 75f) }
+            .filter { locationIsFresh(it, nowElapsed, nowWall) && (!it.hasAccuracy() || it.accuracy <= 75f) }
         val best = cands.minByOrNull { if (it.hasAccuracy()) it.accuracy else 75f } ?: return
         acceptFix(best, gps = best.provider == LocationManager.GPS_PROVIDER)
     }
 
     private fun acceptFix(loc: Location, gps: Boolean) {
         if (loc.hasAccuracy() && loc.accuracy > 75f) return
-        val age = System.currentTimeMillis() - loc.time
-        if (age > 30_000L) return
+        val nowElapsed = SystemClock.elapsedRealtime()
+        if (!locationIsFresh(loc, nowElapsed, System.currentTimeMillis())) return
         lastFix = loc.latitude to loc.longitude
         lastFixAt = loc.time
+        val fixElapsed = loc.elapsedRealtimeNanos / 1_000_000L
+        lastFixElapsedAt = fixElapsed.takeIf { it > 0L } ?: nowElapsed
         if (loc.hasSpeed() && loc.speed >= 0f && loc.speed.isFinite()) {
             val loose = Build.VERSION.SDK_INT >= 26 &&
                 loc.hasSpeedAccuracy() && loc.speedAccuracyMetersPerSecond > 4f
@@ -941,7 +990,9 @@ class FieldwatchApp : Application() {
         if (!plausible) return
         lastGpsFix = lat to lon
         lastGpsFixAt = at
+        lastGpsFixElapsedAt = fixElapsed.takeIf { it > 0L } ?: nowElapsed
         lastGpsAcc = accuracy ?: Float.NaN
+        rememberGpsSeed(lat, lon)
         val learned = synchronized(motionLock) {
             if (!huntMotion) null
             else {
@@ -1050,6 +1101,44 @@ class FieldwatchApp : Application() {
         private const val HUNT_STRIDE_FILE = "hunt-stride.txt"
         /** Walking-motion steps with a silent step sensor before that sensor is left behind. */
         private const val ACCEL_TAKEOVER_STEPS = 3
+        private const val GPS_PREFS = "gps-startup"
+        private const val GPS_SEED_LAT = "last-gps-lat"
+        private const val GPS_SEED_LON = "last-gps-lon"
+        private const val GPS_CLOCK_CHECKPOINT = "clock-checkpoint"
+        private const val GPS_ASSIST_THROTTLE_MS = 30_000L
+        private const val GPS_SEED_WRITE_THROTTLE_MS = 30_000L
+    }
+
+    private fun gpsPrefs() = getSharedPreferences(GPS_PREFS, MODE_PRIVATE)
+
+    private fun loadGpsStartupState() {
+        val prefs = gpsPrefs()
+        val lat = prefs.getString(GPS_SEED_LAT, null)?.toDoubleOrNull()
+        val lon = prefs.getString(GPS_SEED_LON, null)?.toDoubleOrNull()
+        if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) {
+            savedGpsSeed = lat to lon
+        }
+        rememberClockCheckpoint()
+    }
+
+    private fun rememberGpsSeed(lat: Double, lon: Double) {
+        savedGpsSeed = lat to lon
+        val now = SystemClock.elapsedRealtime()
+        if (lastGpsSeedWriteAt != 0L && now - lastGpsSeedWriteAt < GPS_SEED_WRITE_THROTTLE_MS) return
+        lastGpsSeedWriteAt = now
+        gpsPrefs().edit()
+            .putString(GPS_SEED_LAT, lat.toString())
+            .putString(GPS_SEED_LON, lon.toString())
+            .apply()
+        rememberClockCheckpoint()
+    }
+
+    private fun rememberClockCheckpoint() {
+        val now = System.currentTimeMillis()
+        if (now < MIN_SANE_CLOCK_MS) return
+        val prefs = gpsPrefs()
+        if (now <= prefs.getLong(GPS_CLOCK_CHECKPOINT, 0L)) return
+        prefs.edit().putLong(GPS_CLOCK_CHECKPOINT, now).apply()
     }
 }
 
@@ -1065,6 +1154,25 @@ internal fun phoneFixIsCurrent(fixAt: Long, now: Long): Boolean {
     val age = now - fixAt
     return age >= -5_000L && age <= 30_000L
 }
+
+/** Monotonic freshness survives NTP correcting a batteryless tablet's wall clock. */
+internal fun elapsedFixIsCurrent(fixAt: Long, now: Long): Boolean {
+    if (fixAt <= 0L) return false
+    val age = now - fixAt
+    return age >= -5_000L && age <= 30_000L
+}
+
+private fun locationIsFresh(loc: Location, nowElapsed: Long, nowWall: Long): Boolean {
+    val fixElapsed = loc.elapsedRealtimeNanos / 1_000_000L
+    return if (fixElapsed > 0L) elapsedFixIsCurrent(fixElapsed, nowElapsed)
+    else phoneFixIsCurrent(loc.time, nowWall)
+}
+
+private const val MIN_SANE_CLOCK_MS = 1_735_689_600_000L // 2025-01-01 UTC
+private const val CLOCK_BACKSTEP_ALLOWANCE_MS = 6L * 60L * 60L * 1_000L
+
+internal fun clockNeedsNetwork(now: Long, checkpoint: Long): Boolean =
+    now < MIN_SANE_CLOCK_MS || (checkpoint >= MIN_SANE_CLOCK_MS && now + CLOCK_BACKSTEP_ALLOWANCE_MS < checkpoint)
 
 /**
  * Where a hunt may pin its start. A resumed walk already has a place, so it

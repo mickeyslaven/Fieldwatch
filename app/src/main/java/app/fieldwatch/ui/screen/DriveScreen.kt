@@ -120,7 +120,7 @@ fun DriveView(
         state.scanBlocked -> DriveHeroMode.BLOCKED
         !state.scanning -> DriveHeroMode.STARTING
         activeCount > 0 -> DriveHeroMode.ALERT
-        state.drivePath.isEmpty() -> DriveHeroMode.WAITING_GPS
+        !state.driveGpsLive -> DriveHeroMode.WAITING_GPS
         else -> DriveHeroMode.CLEAR
     }
 
@@ -248,7 +248,7 @@ private fun DriveMapPanel(
             online, basemap, overlays,
         )
     }
-    val waitingForGps = state.drivePath.isEmpty()
+    val waitingForGps = !state.driveGpsLive
     // The offline pack must be drawable before the first receiver fix. This point is only a
     // map center; it never enters FieldwatchApp, the recorded path, or proximity alerts.
     val displayPath = remember(state.drivePath) {
@@ -292,7 +292,8 @@ private fun DriveMapPanel(
         mappedActive -> "CAMERA ALERT"
         mode == DriveHeroMode.ALERT -> if (activeCount == 1) "ACTIVE ALERT" else "$activeCount ACTIVE ALERTS"
         mode == DriveHeroMode.BLOCKED -> "SCANNER BLOCKED"
-        mode == DriveHeroMode.WAITING_GPS -> "WAITING FOR GPS"
+        mode == DriveHeroMode.WAITING_GPS && state.gpsClockNeedsNetwork -> "GPS NEEDS WI-FI TIME"
+        mode == DriveHeroMode.WAITING_GPS -> "ACQUIRING GPS"
         mode == DriveHeroMode.STARTING -> "STARTING SCANNERS"
         else -> "ALL CLEAR"
     }
@@ -487,14 +488,18 @@ private fun DriveSummary(
         DriveHeroMode.CLEAR -> "ALL CLEAR"
         DriveHeroMode.ALERT -> if (activeCount == 1) "1 ACTIVE ALERT" else "$activeCount ACTIVE ALERTS"
         DriveHeroMode.STARTING -> "STARTING SCANNERS"
-        DriveHeroMode.WAITING_GPS -> "WAITING FOR GPS"
+        DriveHeroMode.WAITING_GPS -> if (state.gpsClockNeedsNetwork) "GPS NEEDS WI-FI TIME" else "ACQUIRING GPS"
         DriveHeroMode.BLOCKED -> "SCANNER BLOCKED"
     }
     val subtitle = when (mode) {
         DriveHeroMode.CLEAR -> "Watchlist and GNSS monitor are quiet"
         DriveHeroMode.ALERT -> "Voice alert issued · details at right"
         DriveHeroMode.STARTING -> "Waiting for Wi-Fi and Bluetooth radios"
-        DriveHeroMode.WAITING_GPS -> "Map stays ready while location settles"
+        DriveHeroMode.WAITING_GPS -> if (state.gpsClockNeedsNetwork) {
+            "Connect once so Android can restore time and satellite assistance"
+        } else {
+            "Saved offline map stays ready while satellites settle"
+        }
         DriveHeroMode.BLOCKED -> "Open Diagnostics from Settings"
     }
 

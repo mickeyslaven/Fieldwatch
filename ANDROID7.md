@@ -60,6 +60,22 @@ bb1e3439089d194cadd78cc7ba56b721d1a7bdef721ec1b7135ce5f52a6df474
 It contains 40,112 mapped records: 33,707 cameras, 3,961 gunshot detectors, 1,765 speed cameras,
 and 679 red-light cameras.
 
+### Batteryless Shield GPS startup
+
+The tested Shield has no battery-management board or battery-backed clock. A hard power cut can
+therefore leave stock Android with a stale wall clock and GNSS assistance state. This build:
+
+- judges fix freshness from Android's monotonic elapsed time, so an NTP clock correction cannot
+  discard a fresh location;
+- retains the last real satellite fix only as the next boot's offline-map center;
+- explicitly requests Android 7 GNSS time and XTRA assistance when a network becomes available;
+- distinguishes a remembered map center from a live satellite fix; and
+- says `GPS NEEDS WI-FI TIME` when the system clock has fallen behind its saved checkpoint.
+
+An ordinary Android application cannot set the system clock. If the tablet loses clock state on a
+true power cut, one brief network connection may still be required before the stock GNSS provider
+can recover. The bundled map itself remains offline and the saved center is shown while GPS starts.
+
 ## Known Android 7 limitations
 
 - Android 7 does not expose the faster Wi-Fi scan APIs available on Android 11 and later.

@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
             gpsWarmJob = lifecycleScope.launch {
                 delay(2_000L)
                 app.warmStartGps()
+                app.requestGpsNetworkAssistance(forceWarm = false)
             }
         }
     }

@@ -232,6 +232,10 @@ data class FieldwatchUi(
     val operatorPath: List<GpsSample> = emptyList(),
     /** Short, always-available trail for the car dashboard map. */
     val drivePath: List<GpsSample> = emptyList(),
+    /** True only for a satellite fix received in the last 30 seconds. */
+    val driveGpsLive: Boolean = false,
+    /** Hard power loss has moved the system clock behind its saved good checkpoint. */
+    val gpsClockNeedsNetwork: Boolean = false,
     /** Start of the live-map window. Sit start, or the later of switch-on and 15 minutes ago. */
     val livePathSince: Long = Long.MIN_VALUE,
     /** Watchlist alerts drawn on the live map. Not the filtered list. */
@@ -664,9 +668,15 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             else -> SitPathPlot.livePathRadios(labeled, pathSince, alertKeys, watchedFleets, hiddenFlood)
         }
         val phone = app.currentFix()
+        val driveGpsLive = app.gpsFixLive()
         val drivePath = if (config.settings.viewMode == ViewMode.DRIVE) {
             fullOperatorPath.takeLast(180).ifEmpty {
-                if (phone == null) emptyList() else listOf(GpsSample(now, phone.first, phone.second))
+                val seed = app.driveMapSeed()
+                when {
+                    phone != null -> listOf(GpsSample(now, phone.first, phone.second))
+                    seed != null -> listOf(GpsSample(0L, seed.first, seed.second))
+                    else -> emptyList()
+                }
             }
         } else {
             emptyList()
@@ -703,6 +713,8 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             catalogVersion = config.version,
             operatorPath = pathSamples,
             drivePath = drivePath,
+            driveGpsLive = driveGpsLive,
+            gpsClockNeedsNetwork = app.gpsClockNeedsNetwork(),
             livePathSince = pathSince,
             livePathRadios = pathRadios,
             phoneLat = phone?.first,

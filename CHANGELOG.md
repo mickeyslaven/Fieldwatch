@@ -4,6 +4,16 @@ Newest first. This is Fieldwatch (`app.fieldwatch`). Each build below is what Se
 
 Fieldwatch continues the Spectre 1.2.14 field build under a new name, application id, and the MIT License. It does not replace Spectre on a phone.
 
+## 1.1.51-shield7.2-gps — 16 November 2026
+
+- Fixes the batteryless Shield K1 startup path so a wall-clock correction cannot invalidate a
+  fresh GPS fix.
+- Keeps the last real satellite position as the next boot's offline-map center while clearly
+  showing that GPS is still acquiring.
+- Requests Android 7 GNSS time and XTRA assistance as soon as Wi-Fi becomes usable, and identifies
+  a lost system-time checkpoint as `GPS NEEDS WI-FI TIME` instead of leaving the display stuck on
+  a generic waiting message.
+
 ## 1.1.39-shield7.1-drive — 31 October 2026
 
 - Adds a glanceable Drive alerts view for the NVIDIA Shield Tablet K1. Large status cards show
