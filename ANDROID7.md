@@ -72,9 +72,17 @@ therefore leave stock Android with a stale wall clock and GNSS assistance state.
 - distinguishes a remembered map center from a live satellite fix; and
 - says `GPS NEEDS WI-FI TIME` when the system clock has fallen behind its saved checkpoint.
 
-An ordinary Android application cannot set the system clock. If the tablet loses clock state on a
-true power cut, one brief network connection may still be required before the stock GNSS provider
-can recover. The bundled map itself remains offline and the saved center is shown while GPS starts.
+An ordinary Android application cannot set the system clock. Without the optional privileged
+anchor, a true power cut can therefore still require one brief network connection. On the dedicated
+Shield, the separately supplied recovery package installs an 8 KB no-code anchor in
+`/system/priv-app`. Android 7 then grants this signed Fieldwatch update only `SET_TIME`. Fieldwatch
+restores its latest local checkpoint at boot and replaces that approximate time after three
+consistent raw `GnssClock` samples from the satellites. It does not grant general root access and
+does not replace the ROM.
+
+Mapped plate-reader, speed-camera, red-light, gunshot, and other-camera alerts require a live GPS
+course and speed. Drive view now says `ALERTS WAITING FOR GPS` whenever those switches are enabled
+but satellite location is unavailable; it cannot present that state as all clear.
 
 ## Known Android 7 limitations
 

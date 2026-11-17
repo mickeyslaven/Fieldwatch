@@ -1,6 +1,7 @@
 package app.fieldwatch
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -9,12 +10,15 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
+import android.location.GnssClock
+import android.location.GnssMeasurementsEvent
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import app.fieldwatch.alert.Alerter
 import app.fieldwatch.crash.CrashNotes
 import app.fieldwatch.radio.GnssMonitor
@@ -44,6 +48,7 @@ import app.fieldwatch.domain.alertsFor
 import app.fieldwatch.domain.anySensorAlert
 import app.fieldwatch.domain.sensorNotice
 import app.fieldwatch.domain.Geo
+import app.fieldwatch.domain.GnssRawTime
 import app.fieldwatch.domain.GpsSample
 import app.fieldwatch.domain.MapBasemap
 import app.fieldwatch.domain.Hunt
@@ -65,6 +70,7 @@ import app.fieldwatch.radio.TakPublisher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -73,6 +79,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.Locale
+import kotlin.math.abs
 
 data class TrustFix(
     val lat: Double?,
@@ -194,7 +201,14 @@ class FieldwatchApp : Application() {
 
     /** The Shield has no battery-backed clock now; a hard reset commonly returns it to 2012. */
     fun gpsClockNeedsNetwork(now: Long = System.currentTimeMillis()): Boolean =
-        clockNeedsNetwork(now, gpsPrefs().getLong(GPS_CLOCK_CHECKPOINT, 0L))
+        clockNeedsNetwork(
+            now,
+            maxOf(gpsPrefs().getLong(GPS_CLOCK_CHECKPOINT, 0L), CLOCK_RELEASE_FLOOR_MS),
+        )
+
+    /** True only after the recovery-installed privileged anchor grants SET_TIME. */
+    fun offlineClockRepairAvailable(): Boolean =
+        checkCallingOrSelfPermission(SET_TIME_PERMISSION) == PackageManager.PERMISSION_GRANTED
 
     /** Where the hunt dot is. A local meter picture until the walk is on a fix. Not a place to publish. */
     fun huntFix(now: Long = System.currentTimeMillis()): Pair<Double, Double>? {
@@ -569,7 +583,7 @@ class FieldwatchApp : Application() {
     @Volatile
     private var speedMps: Double? = null
     @Volatile
-    private var speedAt: Long = 0L
+    private var speedAtElapsed: Long = 0L
     private val pathLock = Any()
     private val operatorPath = ArrayList<GpsSample>(64)
     private val driveApex = Geo.DriveApex()
@@ -580,6 +594,18 @@ class FieldwatchApp : Application() {
     private var lastGpsWarmStartAt = 0L
     @Volatile
     private var lastGpsAssistAt = 0L
+    @Volatile
+    private var lastGnssClockSetAt = 0L
+    private val gnssClockLock = Any()
+    private var gnssClockCandidateUtc = 0L
+    private var gnssClockCandidateElapsed = 0L
+    private var gnssClockCandidateCount = 0
+    private var gnssClockBootstrapOn = false
+    private val gnssClockBootstrap = object : GnssMeasurementsEvent.Callback() {
+        override fun onGnssMeasurementsReceived(event: GnssMeasurementsEvent) {
+            noteGnssClock(event.clock)
+        }
+    }
     @Volatile
     private var savedGpsSeed: Pair<Double, Double>? = null
     @Volatile
@@ -592,6 +618,9 @@ class FieldwatchApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // The battery/BMS removal also removed reliable RTC backup. The optional privileged
+        // anchor lets this update restore a recent local checkpoint before Android starts GNSS.
+        restoreClockIfPrivileged()
         mapKeys = MapKeyStore(File(filesDir, "map-keys.json"))
         CrashNotes.install(this)
         pendingCrash = runCatching { CrashNotes.pending(this) }.getOrNull()
@@ -654,6 +683,12 @@ class FieldwatchApp : Application() {
             wifiFlood.setSitOpen(sitOpen)
         }
         loadGpsStartupState()
+        scope.launch {
+            while (true) {
+                delay(CLOCK_CHECKPOINT_PERIOD_MS)
+                rememberClockCheckpoint()
+            }
+        }
         sits.startFlusher()
         places.startFlusher(scope)
         trusted.startFlusher()
@@ -823,6 +858,7 @@ class FieldwatchApp : Application() {
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     fun syncLocationUpdates() {
+        syncGnssClockBootstrap()
         if (locationTagWanted()) startLocationUpdates()
         else stopLocationUpdates()
     }
@@ -873,6 +909,85 @@ class FieldwatchApp : Application() {
     fun noteSystemTimeChanged() {
         rememberClockCheckpoint()
         warmStartGps(force = true)
+    }
+
+    /**
+     * Correct the restored checkpoint from the satellites themselves. GnssClock carries GPS time
+     * before Android necessarily has a position fix, so this needs neither Wi-Fi nor cellular.
+     * The setter is inert on ordinary installs and active only with the small privileged anchor.
+     */
+    fun noteGnssClock(clock: GnssClock) {
+        if (!offlineClockRepairAvailable()) return
+        val elapsed = SystemClock.elapsedRealtime()
+        if (lastGnssClockSetAt != 0L && elapsed - lastGnssClockSetAt < GNSS_CLOCK_SET_THROTTLE_MS) return
+        val uncertainty = if (clock.hasTimeUncertaintyNanos()) clock.timeUncertaintyNanos else 0.0
+        if (!uncertainty.isFinite() || uncertainty > GNSS_CLOCK_MAX_UNCERTAINTY_NS) return
+        val leap = if (clock.hasLeapSecond()) clock.leapSecond else GnssRawTime.LEAP_SECOND
+        val safeLeap = leap.takeIf { it in 15..25 } ?: GnssRawTime.LEAP_SECOND
+        val bias = if (clock.hasBiasNanos()) clock.biasNanos else 0.0
+        val utc = runCatching {
+            GnssRawTime.utcMillis(clock.timeNanos, clock.fullBiasNanos, bias, safeLeap)
+        }.getOrNull() ?: return
+        if (!gnssUtcPlausible(utc)) return
+        val delta = abs(utc - System.currentTimeMillis())
+        if (delta <= GNSS_CLOCK_SET_MIN_DELTA_MS) {
+            rememberClockCheckpoint()
+            stopGnssClockBootstrap()
+            return
+        }
+        val stable = synchronized(gnssClockLock) {
+            gnssClockCandidateCount = if (
+                gnssClockCandidateCount > 0 &&
+                gnssClockStepConsistent(
+                    gnssClockCandidateUtc,
+                    gnssClockCandidateElapsed,
+                    utc,
+                    elapsed,
+                )
+            ) {
+                gnssClockCandidateCount + 1
+            } else {
+                1
+            }
+            gnssClockCandidateUtc = utc
+            gnssClockCandidateElapsed = elapsed
+            gnssClockCandidateCount >= GNSS_CLOCK_REQUIRED_SAMPLES
+        }
+        if (!stable) return
+        if (!setSystemTime(utc)) return
+        lastGnssClockSetAt = elapsed
+        synchronized(gnssClockLock) { gnssClockCandidateCount = 0 }
+        rememberClockCheckpoint()
+        stopGnssClockBootstrap()
+        scope.launch {
+            delay(250L)
+            warmStartGps(force = true)
+        }
+    }
+
+    /**
+     * The clock bootstrap is independent of the optional interference monitor. Camera and other
+     * mapped alerts must still be able to acquire GNSS when that sensor switch is off.
+     */
+    private fun syncGnssClockBootstrap() {
+        if (gnssClockBootstrapOn || !offlineClockRepairAvailable() || !hasFineLocation()) return
+        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+        runCatching {
+            LocationManagerCompat.registerGnssMeasurementsCallback(
+                manager,
+                ContextCompat.getMainExecutor(this),
+                gnssClockBootstrap,
+            )
+        }.onSuccess { gnssClockBootstrapOn = true }
+    }
+
+    private fun stopGnssClockBootstrap() {
+        if (!gnssClockBootstrapOn) return
+        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+        runCatching {
+            LocationManagerCompat.unregisterGnssMeasurementsCallback(manager, gnssClockBootstrap)
+        }
+        gnssClockBootstrapOn = false
     }
 
     fun startLocationUpdates() {
@@ -955,7 +1070,7 @@ class FieldwatchApp : Application() {
                 loc.hasSpeedAccuracy() && loc.speedAccuracyMetersPerSecond > 4f
             if (!loose) {
                 speedMps = loc.speed.toDouble()
-                speedAt = System.currentTimeMillis()
+                speedAtElapsed = nowElapsed
             }
         }
         if (gps) {
@@ -1058,16 +1173,23 @@ class FieldwatchApp : Application() {
         val hit = runCatching {
             val nearby = flockIndex.near(lat, lon, FlockApproach.REARM_M + 40.0)
                 .filter { settings.alertsFor(it.kind) }
-            flockLatch.consider(lat, lon, travelDeg, floodSpeed(), nearby)
+            flockLatch.consider(
+                lat,
+                lon,
+                travelDeg,
+                floodSpeed(),
+                nearby,
+                nowMs = SystemClock.elapsedRealtime(),
+            )
         }.getOrNull() ?: return
         val (key, values) = sensorNotice(hit)
         alerter.flockNote(if (values.isEmpty()) LanguageText.text(key) else LanguageText.text(key, values))
     }
 
     /** GPS speed in m/s, or null when the latest fix has no usable speed. */
-    fun floodSpeed(now: Long = System.currentTimeMillis()): Double? {
+    fun floodSpeed(nowElapsed: Long = SystemClock.elapsedRealtime()): Double? {
         val speed = speedMps ?: return null
-        if (now - speedAt > 12_000L) return null
+        if (nowElapsed - speedAtElapsed > 12_000L) return null
         return speed
     }
 
@@ -1107,6 +1229,15 @@ class FieldwatchApp : Application() {
         private const val GPS_CLOCK_CHECKPOINT = "clock-checkpoint"
         private const val GPS_ASSIST_THROTTLE_MS = 30_000L
         private const val GPS_SEED_WRITE_THROTTLE_MS = 30_000L
+        private const val SET_TIME_PERMISSION = "android.permission.SET_TIME"
+        private const val CLOCK_CHECKPOINT_PERIOD_MS = 60_000L
+        private const val GNSS_CLOCK_SET_THROTTLE_MS = 30_000L
+        private const val GNSS_CLOCK_SET_MIN_DELTA_MS = 1_500L
+        private const val GNSS_CLOCK_MAX_UNCERTAINTY_NS = 5_000_000_000.0
+        private const val GNSS_CLOCK_REQUIRED_SAMPLES = 3
+        /** Release-day lower bound used only when this install has never saved a checkpoint. */
+        private const val CLOCK_RELEASE_FLOOR_MS = 1_794_787_200_000L // 2026-11-16 UTC
+        private const val MAX_PLAUSIBLE_GNSS_UTC_MS = 4_102_444_800_000L // 2100-01-01 UTC
     }
 
     private fun gpsPrefs() = getSharedPreferences(GPS_PREFS, MODE_PRIVATE)
@@ -1135,11 +1266,29 @@ class FieldwatchApp : Application() {
 
     private fun rememberClockCheckpoint() {
         val now = System.currentTimeMillis()
-        if (now < MIN_SANE_CLOCK_MS) return
+        if (now < CLOCK_RELEASE_FLOOR_MS) return
         val prefs = gpsPrefs()
         if (now <= prefs.getLong(GPS_CLOCK_CHECKPOINT, 0L)) return
         prefs.edit().putLong(GPS_CLOCK_CHECKPOINT, now).apply()
     }
+
+    private fun restoreClockIfPrivileged(): Boolean {
+        if (!offlineClockRepairAvailable()) return false
+        val checkpoint = maxOf(
+            gpsPrefs().getLong(GPS_CLOCK_CHECKPOINT, 0L),
+            CLOCK_RELEASE_FLOOR_MS,
+        )
+        if (!clockNeedsNetwork(System.currentTimeMillis(), checkpoint)) return false
+        return setSystemTime(checkpoint)
+    }
+
+    private fun setSystemTime(utcMs: Long): Boolean = runCatching {
+        (getSystemService(ALARM_SERVICE) as AlarmManager).setTime(utcMs)
+        true
+    }.getOrDefault(false)
+
+    private fun gnssUtcPlausible(utcMs: Long): Boolean =
+        utcMs in CLOCK_RELEASE_FLOOR_MS..MAX_PLAUSIBLE_GNSS_UTC_MS
 }
 
 data class ArrivalsState(
@@ -1173,6 +1322,18 @@ private const val CLOCK_BACKSTEP_ALLOWANCE_MS = 6L * 60L * 60L * 1_000L
 
 internal fun clockNeedsNetwork(now: Long, checkpoint: Long): Boolean =
     now < MIN_SANE_CLOCK_MS || (checkpoint >= MIN_SANE_CLOCK_MS && now + CLOCK_BACKSTEP_ALLOWANCE_MS < checkpoint)
+
+/** Reject a single corrupt raw clock before it can change Android's system time. */
+internal fun gnssClockStepConsistent(
+    previousUtc: Long,
+    previousElapsed: Long,
+    utc: Long,
+    elapsed: Long,
+): Boolean {
+    val elapsedStep = elapsed - previousElapsed
+    if (elapsedStep !in 0L..5_000L) return false
+    return abs((utc - previousUtc) - elapsedStep) <= 2_000L
+}
 
 /**
  * Where a hunt may pin its start. A resumed walk already has a place, so it

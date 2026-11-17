@@ -29,8 +29,8 @@ android {
         applicationId = "app.fieldwatch"
         minSdk = 24
         targetSdk = 35
-        versionCode = 62
-        versionName = "1.1.51-shield7.2-gps"
+        versionCode = 63
+        versionName = "1.1.52-shield7.2-offline-gnss"
         vectorDrawables.useSupportLibrary = true
     }
 

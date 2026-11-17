@@ -4,6 +4,18 @@ Newest first. This is Fieldwatch (`app.fieldwatch`). Each build below is what Se
 
 Fieldwatch continues the Spectre 1.2.14 field build under a new name, application id, and the MIT License. It does not replace Spectre on a phone.
 
+## 1.1.52-shield7.2-offline-gnss — 16 November 2026
+
+- Adds a network-independent GNSS cold-start path for the dedicated batteryless Shield when the
+  separately supplied recovery anchor is installed. Fieldwatch restores its saved clock locally,
+  then corrects it from three consistent raw satellite-clock samples.
+- Keeps the privileged operation narrowly limited to Android's `SET_TIME`; it does not add general
+  root access or replace the ROM.
+- Uses monotonic time for current vehicle speed and mapped-sensor alert throttling, so a clock
+  correction cannot silently suspend camera alerts.
+- Drive view says `ALERTS WAITING FOR GPS` while enabled plate-reader, speed, red-light, gunshot, or
+  mapped-camera alerts lack the live GPS course and speed they require.
+
 ## 1.1.51-shield7.2-gps — 16 November 2026
 
 - Fixes the batteryless Shield K1 startup path so a wall-clock correction cannot invalidate a

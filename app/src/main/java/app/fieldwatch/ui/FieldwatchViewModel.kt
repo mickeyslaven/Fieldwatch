@@ -236,6 +236,10 @@ data class FieldwatchUi(
     val driveGpsLive: Boolean = false,
     /** Hard power loss has moved the system clock behind its saved good checkpoint. */
     val gpsClockNeedsNetwork: Boolean = false,
+    /** At least one mapped plate/camera/sensor alert switch is enabled. */
+    val mappedAlertsEnabled: Boolean = false,
+    /** Recovery-installed clock privilege can bootstrap GNSS with no network. */
+    val offlineClockRepair: Boolean = false,
     /** Start of the live-map window. Sit start, or the later of switch-on and 15 minutes ago. */
     val livePathSince: Long = Long.MIN_VALUE,
     /** Watchlist alerts drawn on the live map. Not the filtered list. */
@@ -715,6 +719,8 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
             drivePath = drivePath,
             driveGpsLive = driveGpsLive,
             gpsClockNeedsNetwork = app.gpsClockNeedsNetwork(),
+            mappedAlertsEnabled = config.settings.anySensorAlert(),
+            offlineClockRepair = app.offlineClockRepairAvailable(),
             livePathSince = pathSince,
             livePathRadios = pathRadios,
             phoneLat = phone?.first,
@@ -851,7 +857,7 @@ class FieldwatchViewModel(application: Application) : AndroidViewModel(applicati
                 val now = System.currentTimeMillis()
                 clock.value = now
                 val liveKeys = app.devices.devices.value.mapTo(HashSet()) { it.key }
-                app.pairingFlood.tick(now, app.floodSpeed(now))
+                app.pairingFlood.tick(now, app.floodSpeed())
                 app.pairingFlood.prune(liveKeys)
                 app.wifiFlood.prune(liveKeys)
                 app.sits.noteFloods(app.pairingFlood.bursts())

@@ -34,6 +34,14 @@ class PhoneFixTest {
     }
 
     @Test
+    fun rawGnssClockMustAdvanceWithElapsedTime() {
+        assertTrue(gnssClockStepConsistent(100_000L, 5_000L, 101_000L, 6_000L))
+        assertTrue(gnssClockStepConsistent(100_000L, 5_000L, 102_500L, 6_000L))
+        assertFalse(gnssClockStepConsistent(100_000L, 5_000L, 160_000L, 6_000L))
+        assertFalse(gnssClockStepConsistent(100_000L, 5_000L, 106_000L, 11_000L))
+    }
+
+    @Test
     fun aFreshHuntKeepsTheAccuracyTheFixReported() {
         val now = 20_000L
         val fix = 36.2 to -115.1
